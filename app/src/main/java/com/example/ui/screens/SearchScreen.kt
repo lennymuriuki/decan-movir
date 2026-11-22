@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MovieFilter
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -141,6 +142,27 @@ fun SearchScreen(
               },
               label = { Text(sug.title, style = MaterialTheme.typography.labelMedium) },
               modifier = Modifier.testTag("search_suggestion_${sug.subjectId}"),
+            )
+          }
+        }
+      } else if (uiState.query.isBlank() && uiState.trendingKeywords.isNotEmpty()) {
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          items(uiState.trendingKeywords, key = { it }) { keyword ->
+            AssistChip(
+              onClick = {
+                onQueryChange(keyword)
+                onSubmitSearch()
+              },
+              leadingIcon = {
+                Icon(
+                  imageVector = Icons.Filled.TrendingUp,
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp),
+                  tint = MaterialTheme.colorScheme.primary,
+                )
+              },
+              label = { Text(keyword, style = MaterialTheme.typography.labelMedium) },
+              modifier = Modifier.testTag("trending_keyword_$keyword"),
             )
           }
         }

@@ -162,17 +162,42 @@ class MovieBoxEngine(
       }
 
       MovieBoxHomeFeed(
-        spotlight = spotlight.distinctBy { it.id }.take(6),
+        spotlight = spotlight.distinctBy { it.id }.take(8),
         rails = rails,
         allMovies = allMovies.values.toList(),
       )
     }
+
+  suspend fun getRankings(page: Int = 1, perPage: Int = 20): List<Movie> {
+    val path =
+      "/wefeed-mobile-bff/tab/ranking-list?tabId=0&categoryType=4516404531735022304&page=$page&perPage=$perPage"
+    val data = apiRequest("GET", path).optJSONObject("data") ?: JSONObject()
+    val raw =
+      data.optJSONArray("items")
+        ?: data.optJSONArray("subjects")
+        ?: data.optJSONArray("list")
+        ?: JSONArray()
+    val ranked = mutableListOf<Movie>()
+    for (i in 0 until raw.length()) {
+      val item = raw.optJSONObject(i) ?: continue
+      val sub = item.optJSONObject("subject") ?: item
+      parseSubjectToMovie(sub)?.let { movie ->
+        ranked.add(movie.copy(rankPosition = ((page - 1) * perPage) + ranked.size + 1))
+      }
+    }
+    return ranked
+  }
 
   suspend fun getFilteredFeed(
     tabId: Int,
     page: Int = 1,
     perPage: Int = 24,
     sort: String = "RECOMMEND",
+    genre: String = "ALL",
+    country: String = "ALL",
+    year: String = "ALL",
+    language: String = "ALL",
+    overrideMediaType: String? = null,
   ): List<Movie> =
     withContext(Dispatchers.IO) {
       val url = "$API_BASE/subject/filter"
@@ -183,10 +208,10 @@ class MovieBoxEngine(
             "filter",
             JSONObject().apply {
               put("sort", sort)
-              put("genre", "ALL")
-              put("country", "ALL")
-              put("year", "ALL")
-              put("language", "ALL")
+              put("genre", genre)
+              put("country", country)
+              put("year", year)
+              put("language", language)
             },
           )
           put("page", page)
@@ -211,19 +236,103 @@ class MovieBoxEngine(
       val out = mutableListOf<Movie>()
       for (i in 0 until raw.length()) {
         val obj = raw.optJSONObject(i) ?: continue
-        parseSubjectToMovie(obj, defaultIsSeries = (tabId == 5))?.let { out.add(it) }
+        parseSubjectToMovie(
+          sub = obj,
+          defaultIsSeries = (tabId == 5),
+          overrideMediaType = overrideMediaType,
+        )?.let { out.add(it) }
       }
       out
     }
 
-  suspend fun getMovies(page: Int = 1, perPage: Int = 24, sort: String = "RECOMMEND"): List<Movie> =
-    getFilteredFeed(tabId = 2, page = page, perPage = perPage, sort = sort)
+  suspend fun getMovies(
+    page: Int = 1,
+    perPage: Int = 24,
+    sort: String = "RECOMMEND",
+    genre: String = "ALL",
+  ): List<Movie> = getFilteredFeed(tabId = 2, page = page, perPage = perPage, sort = sort, genre = genre)
 
   suspend fun getTvSeries(
     page: Int = 1,
     perPage: Int = 24,
     sort: String = "RECOMMEND",
-  ): List<Movie> = getFilteredFeed(tabId = 5, page = page, perPage = perPage, sort = sort)
+    genre: String = "ALL",
+  ): List<Movie> = getFilteredFeed(tabId = 5, page = page, perPage = perPage, sort = sort, genre = genre)
+
+  suspend fun getAnime(page: Int = 1, perPage: Int = 24): List<Movie> {
+    val animeSeries =
+      runCatching {
+        getFilteredFeed(
+          tabId = 5,
+          page = page,
+          perPage = perPage,
+          sort = "RECOMMEND",
+          genre = "Animation",
+          overrideMediaType = "Anime",
+        )
+      }.getOrDefault(emptyList())
+    val animeMovies =
+      runCatching {
+        getFilteredFeed(
+          tabId = 2,
+          page = page,
+          perPage = perPage / 2,
+          sort = "RECOMMEND",
+          genre = "Animation",
+          overrideMediaType = "Anime",
+        )
+      }.getOrDefault(emptyList())
+    return (animeSeries + animeMovies).distinctBy { it.id }
+  }
+
+  suspend fun getRecommendations(subjectId: String, page: Int = 1, perPage: Int = 12): List<Movie> {
+    val path =
+      "/wefeed-mobile-bff/subject-api/detail-rec?subjectId=$subjectId&page=$page&perPage=$perPage"
+    val data = apiRequest("GET", path).optJSONObject("data") ?: JSONObject()
+    val raw =
+      data.optJSONArray("items")
+        ?: data.optJSONArray("subjects")
+        ?: data.optJSONArray("list")
+        ?: JSONArray()
+    val list = mutableListOf<Movie>()
+    for (i in 0 until raw.length()) {
+      val item = raw.optJSONObject(i) ?: continue
+      val sub = item.optJSONObject("subject") ?: item
+      parseSubjectToMovie(sub)?.let { list.add(it) }
+    }
+    return list
+  }
+
+  suspend fun getTrendingKeywords(): List<String> =
+    withContext(Dispatchers.IO) {
+      val url = "$API_BASE/subject/hot-search"
+      val req =
+        Request.Builder()
+          .url(url)
+          .get()
+          .addHeader("User-Agent", MovieBoxCrypto.WEB_USER_AGENT)
+          .addHeader("Referer", "https://moviebox.ph/")
+          .build()
+      client.newCall(req).execute().use { resp ->
+        if (!resp.isSuccessful) return@withContext emptyList()
+        val root = JSONObject(resp.body?.string().orEmpty())
+        val data = root.optJSONObject("data") ?: JSONObject()
+        val arr =
+          data.optJSONArray("everyoneSearch")
+            ?: data.optJSONArray("items")
+            ?: data.optJSONArray("hot")
+            ?: JSONArray()
+        buildList {
+          for (i in 0 until arr.length()) {
+            val obj = arr.optJSONObject(i)
+            val word =
+              if (obj != null) obj.optString("title").ifBlank { obj.optString("word") }
+              else arr.optString(i)
+            if (word.isNotBlank()) add(word)
+          }
+        }.distinct().take(10)
+      }
+    }
 
   suspend fun search(query: String, page: Int = 1, perPage: Int = 20): List<Movie> {
     val payload =
@@ -315,7 +424,9 @@ class MovieBoxEngine(
         ?: throw IllegalStateException("Invalid MovieBox detail payload")
 
     val seasons =
-      if (movie.mediaType.equals("Series", ignoreCase = true)) {
+      if (movie.mediaType.equals("Series", ignoreCase = true) ||
+          movie.mediaType.equals("Anime", ignoreCase = true)
+      ) {
         runCatching { getEpisodes(subjectId) }.getOrDefault(emptyList())
       } else {
         emptyList()
@@ -582,6 +693,20 @@ class MovieBoxEngine(
     return subs
   }
 
+  suspend fun fetchSubtitleCues(subtitleUrl: String): List<SubtitleCue> =
+    withContext(Dispatchers.IO) {
+      val req =
+        Request.Builder()
+          .url(subtitleUrl)
+          .get()
+          .addHeader("User-Agent", MovieBoxCrypto.WEB_USER_AGENT)
+          .build()
+      client.newCall(req).execute().use { resp ->
+        if (!resp.isSuccessful) return@withContext emptyList()
+        SrtParser.parse(resp.body?.string().orEmpty())
+      }
+    }
+
   private fun extractCaptionsArray(root: JSONObject): List<JSONObject> {
     val dataObj = root.optJSONObject("data")
     val arr =
@@ -608,23 +733,35 @@ class MovieBoxEngine(
     sub: JSONObject,
     defaultIsSeries: Boolean = false,
     overrideDetailPath: String? = null,
+    overrideMediaType: String? = null,
   ): Movie? {
     val subjectId = sub.optString("subjectId").trim()
     val title = sub.optString("title").trim()
     if (subjectId.isBlank() || title.isBlank()) return null
 
     val subjectType = sub.optInt("subjectType", if (defaultIsSeries) 2 else 1)
-    val mediaType = if (subjectType == 1) "Movie" else "Series"
+    val rawGenre = sub.optString("genre").trim()
+    val country = sub.optString("countryName").takeIf { it.isNotBlank() }
+    val inferredAnime =
+      rawGenre.contains("Anime", ignoreCase = true) ||
+        (rawGenre.contains("Animation", ignoreCase = true) &&
+          (country.equals("Japan", ignoreCase = true) ||
+            sub.optString("language").contains("Japanese", ignoreCase = true)))
+    val mediaType =
+      overrideMediaType
+        ?: when {
+          inferredAnime -> "Anime"
+          subjectType == 1 -> "Movie"
+          else -> "Series"
+        }
     val coverObj = sub.optJSONObject("cover")
     val coverUrl = coverObj?.optString("url").orEmpty().trim()
     val releaseDate = sub.optString("releaseDate")
     val year =
       releaseDate.take(4).takeIf { it.length == 4 && it.all(Char::isDigit) } ?: "2025"
-    val rawGenre = sub.optString("genre").trim()
     val primaryGenre =
       rawGenre.split(",", "/").firstOrNull()?.trim()?.ifBlank { "Cinema" } ?: "Cinema"
     val imdb = sub.optString("imdbRatingValue").takeIf { it.isNotBlank() && it != "0" }
-    val country = sub.optString("countryName").takeIf { it.isNotBlank() }
     val lang = sub.optString("language").takeIf { it.isNotBlank() }
     val durationRaw = sub.optInt("duration", 0)
     val runtimeMin =

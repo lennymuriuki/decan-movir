@@ -1,0 +1,122 @@
+name: Release Decan Movie
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: 'Release version tag (e.g. v1.1.0)'
+        required: true
+        default: 'v1.0.1'
+      release_notes:
+        description: 'Optional release summary'
+        required: false
+        default: 'Decan Movie Android release with MovieBox 1080p streaming, batch downloads, anime, rankings, and Netflix-style theater player.'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Ensure CI debug keystore exists
+        run: |
+          if [ ! -f debug.keystore ]; then
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -alias androiddebugkey \
+              -storepass android \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      - name: Restore google-services.json from GitHub Secret (optional)
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            if printf '%s' "$GOOGLE_SERVICES_JSON" | grep -q '"project_info"'; then
+              printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+            else
+              printf '%s' "$GOOGLE_SERVICES_JSON" | base64 -d > app/google-services.json
+            fi
+          fi
+
+      - name: Resolve version tag
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.version_tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          CLEAN_VER="${TAG#v}"
+          echo "version_name=${CLEAN_VER}" >> "$GITHUB_OUTPUT"
+
+      - name: Run Unit Tests
+        run: gradle :app:testDebugUnitTest --no-daemon
+
+      - name: Build Debug APK
+        run: gradle :app:assembleDebug --no-daemon
+
+      - name: Prepare Release Artifacts
+        run: |
+          mkdir -p release-assets
+          cp app/build/outputs/apk/debug/app-debug.apk "release-assets/decan-movie-${{ steps.meta.outputs.tag }}-debug.apk"
+
+      - name: Build Signed Release APK & AAB (if signing secret configured)
+        env:
+          SIGNING_KEY_BASE64: ${{ secrets.SIGNING_KEY_BASE64 }}
+          KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$SIGNING_KEY_BASE64" ]; then
+            printf '%s' "$SIGNING_KEY_BASE64" | base64 -d > "${KEYSTORE_PATH}"
+            gradle :app:assembleRelease :app:bundleRelease --no-daemon
+            cp app/build/outputs/apk/release/app-release.apk "release-assets/decan-movie-${{ steps.meta.outputs.tag }}-release.apk"
+            cp app/build/outputs/bundle/release/app-release.aab "release-assets/decan-movie-${{ steps.meta.outputs.tag }}.aab"
+          else
+            echo "SIGNING_KEY_BASE64 not set; skipping release signing."
+          fi
+
+      - name: Create Git Tag (for workflow_dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f "${{ steps.meta.outputs.tag }}"
+          git push origin "refs/tags/${{ steps.meta.outputs.tag }}" --force
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: "Decan Movie ${{ steps.meta.outputs.tag }}"
+          body: ${{ github.event.inputs.release_notes || 'Automated Decan Movie Android build with MovieBox APIs, theater player, and batch downloads.' }}
+          generate_release_notes: true
+          files: |
+            release-assets/*

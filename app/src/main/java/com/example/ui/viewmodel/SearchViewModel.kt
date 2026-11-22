@@ -28,6 +28,8 @@ data class SearchUiState(
   val isLoading: Boolean = false,
   val results: List<Movie> = emptyList(),
   val suggestions: List<MovieBoxSuggestion> = emptyList(),
+  val trendingKeywords: List<String> =
+    listOf("Avatar", "Breaking Bad", "Anime", "Oppenheimer", "Sci-Fi", "Action"),
   val isOfflineFallback: Boolean = false,
 )
 
@@ -41,7 +43,14 @@ class SearchViewModel(
   private var searchJob: Job? = null
 
   init {
-    viewModelScope.launch { executeSearch("") }
+    viewModelScope.launch {
+      val trendingDeferred = async { catalogRepository.getTrendingKeywords() }
+      executeSearch("")
+      val trending = trendingDeferred.await()
+      if (trending.isNotEmpty()) {
+        _uiState.update { it.copy(trendingKeywords = trending) }
+      }
+    }
   }
 
   fun onQueryChange(newQuery: String) {

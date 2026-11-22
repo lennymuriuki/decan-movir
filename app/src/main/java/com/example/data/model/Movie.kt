@@ -26,6 +26,7 @@ data class Movie(
   val language: String? = null,
   val detailPath: String? = null,
   val sourceProvider: String = "iTunes",
+  val rankPosition: Int? = null,
 ) {
   companion object {
     fun sanitizeId(raw: String): String {

@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.BookmarkAdded
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.DownloadForOffline
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Hd
@@ -44,6 +45,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -86,10 +88,11 @@ import com.example.data.remote.moviebox.MovieBoxDub
 import com.example.data.remote.moviebox.MovieBoxSeason
 import com.example.data.remote.moviebox.MovieBoxStream
 import com.example.data.remote.moviebox.MovieBoxSubtitle
+import com.example.ui.components.BatchDownloadSheet
 import com.example.ui.components.MetadataChip
+import com.example.ui.components.MoviePosterCard
 import com.example.ui.components.MoviePosterImage
 import com.example.ui.components.StarRatingBar
-import com.example.ui.components.TrailerVideoPlayer
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 
@@ -99,9 +102,14 @@ fun MovieDetailScreen(
   movieId: String,
   savedEntry: SavedMovieEntry?,
   catalogRepository: MovieCatalogRepository,
+  allowMeteredDownloads: Boolean,
+  includeSubtitlesInBatch: Boolean,
   isSaving: Boolean,
   onBack: () -> Unit,
   onSwitchSubject: (String) -> Unit,
+  onOpenPlayer: (Movie, Int, Int) -> Unit,
+  onOpenMovie: (Movie) -> Unit,
+  onToggleQuickWatchlist: (Movie) -> Unit,
   onNotify: (String) -> Unit,
   onSaveEntry: (Movie, WatchStatus, Boolean, Int, String) -> Unit,
   onRemoveEntry: (String, String) -> Unit,
@@ -120,21 +128,17 @@ fun MovieDetailScreen(
   var selectedEpisode by remember(movieId) { mutableIntStateOf(0) }
   var streams by remember(movieId) { mutableStateOf<List<MovieBoxStream>>(emptyList()) }
   var subtitles by remember(movieId) { mutableStateOf<List<MovieBoxSubtitle>>(emptyList()) }
+  var recommendations by remember(movieId) { mutableStateOf<List<Movie>>(emptyList()) }
   var isResolvingStreams by remember(movieId) { mutableStateOf(false) }
-  var activeStream by remember(movieId) { mutableStateOf<MovieBoxStream?>(null) }
+  var showBatchSheet by remember(movieId) { mutableStateOf(false) }
 
   suspend fun loadStreamsAndSubs(subjectId: String, se: Int, ep: Int, detailPath: String?) {
     if (subjectId.isBlank()) return
     isResolvingStreams = true
     val streamsDeferred = scope.async { catalogRepository.getStreams(subjectId, se, ep, detailPath) }
     val subsDeferred = scope.async { catalogRepository.getSubtitles(subjectId, se, ep) }
-    val resolvedStreams = streamsDeferred.await()
-    val resolvedSubs = subsDeferred.await()
-    streams = resolvedStreams
-    subtitles = resolvedSubs
-    if (activeStream == null) {
-      activeStream = resolvedStreams.firstOrNull { it.isPlayableDirect }
-    }
+    streams = streamsDeferred.await()
+    subtitles = subsDeferred.await()
     isResolvingStreams = false
   }
 
@@ -147,6 +151,8 @@ fun MovieDetailScreen(
       enriched?.subjectId?.takeIf { it.isNotBlank() }
         ?: movieId.takeIf { it.startsWith("mbox_") }?.removePrefix("mbox_")
         ?: ""
+    val recDeferred =
+      scope.async { catalogRepository.getRecommendations(sid, enriched?.genre ?: movie?.genre) }
     if (sid.isNotBlank()) {
       val rich = catalogRepository.getMovieBoxRichDetail(sid)
       if (rich != null) {
@@ -165,6 +171,7 @@ fun MovieDetailScreen(
         loadStreamsAndSubs(sid, 0, 0, enriched?.detailPath)
       }
     }
+    recommendations = recDeferred.await().filter { it.id != movieId }
     isEnriching = false
   }
 
@@ -364,6 +371,52 @@ fun MovieDetailScreen(
         }
       }
 
+      // Dedicated Theater Player + Batch Download Action Bar
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Button(
+          onClick = { onOpenPlayer(activeMovie, selectedSeason, selectedEpisode) },
+          shape = MaterialTheme.shapes.large,
+          colors =
+            ButtonDefaults.buttonColors(
+              containerColor = MaterialTheme.colorScheme.primary,
+              contentColor = MaterialTheme.colorScheme.onPrimary,
+            ),
+          modifier = Modifier.weight(1.3f).height(52.dp).testTag("detail_watch_theater_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Filled.PlayArrow,
+            contentDescription = null,
+            modifier = Modifier.size(20.dp),
+          )
+          Spacer(modifier = Modifier.width(6.dp))
+          val playLabel =
+            if (selectedSeason > 0 && selectedEpisode > 0)
+              "Watch S${selectedSeason}E$selectedEpisode"
+            else if (activeMovie.subjectId.isNotBlank()) "Watch in Theater"
+            else "Play Trailer"
+          Text(text = playLabel, style = MaterialTheme.typography.labelLarge)
+        }
+
+        if (activeMovie.subjectId.isNotBlank()) {
+          FilledTonalButton(
+            onClick = { showBatchSheet = true },
+            shape = MaterialTheme.shapes.large,
+            modifier = Modifier.weight(1f).height(52.dp).testTag("detail_batch_download_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Filled.DownloadForOffline,
+              contentDescription = null,
+              modifier = Modifier.size(18.dp),
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Batch DL", style = MaterialTheme.typography.labelLarge)
+          }
+        }
+      }
+
       if (dubs.isNotEmpty()) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
           Text(
@@ -395,11 +448,22 @@ fun MovieDetailScreen(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
           ) {
-            Text(
-              text = "Seasons & Episodes",
-              style = MaterialTheme.typography.titleMedium,
-              color = MaterialTheme.colorScheme.onSurface,
-            )
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Text(
+                text = "Seasons & Episodes",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+              Text(
+                text = "${currentSeasonObj.episodeCount} eps",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+              )
+            }
 
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
               items(seasons, key = { it.season }) { seasonObj ->
@@ -408,7 +472,6 @@ fun MovieDetailScreen(
                   onClick = {
                     selectedSeason = seasonObj.season
                     selectedEpisode = 1
-                    activeStream = null
                     scope.launch {
                       loadStreamsAndSubs(
                         activeMovie.subjectId,
@@ -434,7 +497,6 @@ fun MovieDetailScreen(
                   selected = epNum == selectedEpisode,
                   onClick = {
                     selectedEpisode = epNum
-                    activeStream = null
                     scope.launch {
                       loadStreamsAndSubs(
                         activeMovie.subjectId,
@@ -455,27 +517,6 @@ fun MovieDetailScreen(
             }
           }
         }
-      }
-
-      val playableUrl = activeStream?.url ?: activeMovie.previewUrl
-      if (!playableUrl.isNullOrBlank()) {
-        val playerLabel =
-          if (activeStream != null) {
-            val epSuffix =
-              if (selectedSeason > 0 && selectedEpisode > 0) " • S${selectedSeason}E$selectedEpisode"
-              else ""
-            "${activeMovie.title}$epSuffix (${activeStream?.quality})"
-          } else {
-            activeMovie.title
-          }
-        TrailerVideoPlayer(
-          previewUrl = playableUrl,
-          movieTitle = playerLabel,
-          sectionTitle =
-            if (activeStream != null) "HD Stream Player" else "Official Trailer Preview",
-          headers = activeStream?.headers.orEmpty(),
-          autoPlay = activeStream != null,
-        )
       }
 
       if (activeMovie.subjectId.isNotBlank()) {
@@ -568,11 +609,9 @@ fun MovieDetailScreen(
                 }
                 StreamOptionRow(
                   stream = stream,
-                  isActive = activeStream?.url == stream.url,
                   onPlay = {
                     if (stream.isPlayableDirect) {
-                      activeStream = stream
-                      onNotify("Loaded ${stream.quality} stream in player")
+                      onOpenPlayer(activeMovie, selectedSeason, selectedEpisode)
                     } else {
                       runCatching {
                         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(stream.url)))
@@ -586,6 +625,7 @@ fun MovieDetailScreen(
                       stream = stream,
                       season = selectedSeason,
                       episode = selectedEpisode,
+                      allowMetered = allowMeteredDownloads,
                     ).onSuccess {
                       onNotify("Downloading ${activeMovie.title} (${stream.quality}) to Downloads/DecanMovie")
                     }.onFailure { err ->
@@ -632,6 +672,7 @@ fun MovieDetailScreen(
                         subtitle = sub,
                         season = selectedSeason,
                         episode = selectedEpisode,
+                        allowMetered = allowMeteredDownloads,
                       ).onSuccess {
                         onNotify("Downloading ${sub.language} (.srt) subtitles")
                       }.onFailure { err ->
@@ -767,14 +808,49 @@ fun MovieDetailScreen(
           }
         }
       }
+
+      if (recommendations.isNotEmpty()) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+          Text(
+            text = "Recommended Similar Titles",
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onBackground,
+          )
+          LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            items(recommendations, key = { it.id }) { rec ->
+              MoviePosterCard(
+                movie = rec,
+                savedEntry = null,
+                onClick = { onOpenMovie(rec) },
+                onToggleWatchlist = { onToggleQuickWatchlist(rec) },
+                modifier = Modifier.width(136.dp),
+              )
+            }
+          }
+        }
+      }
     }
+  }
+
+  if (showBatchSheet) {
+    BatchDownloadSheet(
+      movie = activeMovie,
+      seasons = seasons,
+      initialSeason = selectedSeason,
+      currentStreams = streams,
+      currentSubtitles = subtitles,
+      catalogRepository = catalogRepository,
+      allowMetered = allowMeteredDownloads,
+      defaultIncludeSubs = includeSubtitlesInBatch,
+      onDismiss = { showBatchSheet = false },
+      onNotify = onNotify,
+    )
   }
 }
 
 @Composable
 private fun StreamOptionRow(
   stream: MovieBoxStream,
-  isActive: Boolean,
   onPlay: () -> Unit,
   onDownload: () -> Unit,
   onCopy: () -> Unit,
@@ -834,15 +910,11 @@ private fun StreamOptionRow(
         onClick = onPlay,
         colors =
           IconButtonDefaults.filledTonalIconButtonColors(
-            containerColor =
-              if (isActive) MaterialTheme.colorScheme.primary
-              else MaterialTheme.colorScheme.surfaceContainerHigh,
-            contentColor =
-              if (isActive) MaterialTheme.colorScheme.onPrimary
-              else MaterialTheme.colorScheme.onSurface,
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
           ),
       ) {
-        Icon(imageVector = Icons.Filled.PlayArrow, contentDescription = "Play stream")
+        Icon(imageVector = Icons.Filled.PlayArrow, contentDescription = "Watch stream in player")
       }
 
       if (stream.isPlayableDirect) {

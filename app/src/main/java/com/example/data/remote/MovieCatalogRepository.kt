@@ -8,6 +8,7 @@ import com.example.data.remote.moviebox.MovieBoxSeason
 import com.example.data.remote.moviebox.MovieBoxStream
 import com.example.data.remote.moviebox.MovieBoxSubtitle
 import com.example.data.remote.moviebox.MovieBoxSuggestion
+import com.example.data.remote.moviebox.SubtitleCue
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.util.concurrent.TimeUnit
@@ -20,8 +21,12 @@ import retrofit2.converter.moshi.MoshiConverterFactory
 
 data class CatalogFeedResult(
   val spotlight: List<Movie>,
+  val rankings: List<Movie>,
+  val anime: List<Movie>,
+  val recommendations: List<Movie>,
   val rails: List<MovieRail>,
   val allMovies: List<Movie>,
+  val trendingKeywords: List<String>,
   val isOfflineFallback: Boolean,
 )
 
@@ -34,11 +39,20 @@ class MovieCatalogRepository(
   suspend fun loadHomeCatalog(): CatalogFeedResult = coroutineScope {
     try {
       val mboxHomeDeferred = async { runCatching { movieBox.getHome() }.getOrNull() }
+      val mboxRankingsDeferred = async {
+        runCatching { movieBox.getRankings(page = 1, perPage = 15) }.getOrDefault(emptyList())
+      }
       val mboxMoviesDeferred = async {
         runCatching { movieBox.getMovies(page = 1, perPage = 24) }.getOrDefault(emptyList())
       }
       val mboxSeriesDeferred = async {
         runCatching { movieBox.getTvSeries(page = 1, perPage = 24) }.getOrDefault(emptyList())
+      }
+      val mboxAnimeDeferred = async {
+        runCatching { movieBox.getAnime(page = 1, perPage = 20) }.getOrDefault(emptyList())
+      }
+      val mboxTrendingDeferred = async {
+        runCatching { movieBox.getTrendingKeywords() }.getOrDefault(emptyList())
       }
       val topItunesDeferred = async {
         runCatching { api.getTopMovies().feed?.entry.orEmpty().mapNotNull { it.toDomain() } }
@@ -52,16 +66,21 @@ class MovieCatalogRepository(
       }
 
       val mboxHome = mboxHomeDeferred.await()
+      val mboxRankings = mboxRankingsDeferred.await()
       val mboxMovies = mboxMoviesDeferred.await()
       val mboxSeries = mboxSeriesDeferred.await()
+      val mboxAnime = mboxAnimeDeferred.await()
+      val trendingKeywords = mboxTrendingDeferred.await()
       val topItunes = topItunesDeferred.await()
       val sciFiItunes = sciFiItunesDeferred.await()
 
       val combined =
         (mboxHome?.spotlight.orEmpty() +
+            mboxRankings +
             mboxHome?.allMovies.orEmpty() +
             mboxMovies +
             mboxSeries +
+            mboxAnime +
             topItunes +
             sciFiItunes)
           .distinctBy { it.id }
@@ -71,18 +90,49 @@ class MovieCatalogRepository(
         fallback.forEach { cache[it.id] = it }
         return@coroutineScope CatalogFeedResult(
           spotlight = fallback.take(5),
+          rankings = fallback.mapIndexed { idx, m -> m.copy(rankPosition = idx + 1) },
+          anime = fallback.filter { it.mediaType.equals("Anime", ignoreCase = true) },
+          recommendations = fallback.shuffled(),
           rails = buildOfflineRails(fallback),
           allMovies = fallback,
+          trendingKeywords = listOf("Avatar", "Breaking Bad", "Anime", "Oppenheimer", "Sci-Fi"),
           isOfflineFallback = true,
         )
       }
 
       combined.forEach { cache[it.id] = it }
 
-      val spotlight =
-        (mboxHome?.spotlight.orEmpty() + mboxMovies.take(3) + topItunes.take(3))
+      val effectiveRankings =
+        if (mboxRankings.isNotEmpty()) {
+          mboxRankings
+        } else {
+          combined
+            .sortedByDescending { it.imdbRating?.toDoubleOrNull() ?: 0.0 }
+            .take(10)
+            .mapIndexed { idx, m -> m.copy(rankPosition = idx + 1) }
+        }
+
+      val effectiveAnime =
+        if (mboxAnime.isNotEmpty()) {
+          mboxAnime
+        } else {
+          combined.filter {
+            it.mediaType.equals("Anime", ignoreCase = true) ||
+              it.genre.contains("Anim", ignoreCase = true)
+          }
+        }
+
+      val recommendations =
+        (mboxHome?.rails?.firstOrNull()?.movies.orEmpty() +
+            effectiveRankings.take(6) +
+            mboxMovies.take(6))
           .distinctBy { it.id }
-          .take(6)
+          .take(14)
+
+      val spotlight =
+        (mboxHome?.spotlight.orEmpty() + effectiveRankings.take(3) + mboxMovies.take(3))
+          .distinctBy { it.id }
+          .take(7)
 
       val rails = buildList {
         if (mboxMovies.isNotEmpty()) {
@@ -90,7 +140,7 @@ class MovieCatalogRepository(
             MovieRail(
               id = "mbox_movies",
               title = "Trending Movies",
-              subtitle = "Full 1080p stream & subtitle resolution",
+              subtitle = "1080p stream & multi-subtitles",
               movies = mboxMovies,
             )
           )
@@ -100,18 +150,28 @@ class MovieCatalogRepository(
             MovieRail(
               id = "mbox_series",
               title = "Popular TV Series",
-              subtitle = "Browse seasons, episodes & captions",
+              subtitle = "Seasons, episodes & batch downloads",
               movies = mboxSeries,
             )
           )
         }
-        mboxHome?.rails?.take(4)?.forEach { add(it) }
+        if (effectiveAnime.isNotEmpty()) {
+          add(
+            MovieRail(
+              id = "mbox_anime",
+              title = "Anime & Animation",
+              subtitle = "Subbed & dubbed series and films",
+              movies = effectiveAnime,
+            )
+          )
+        }
+        mboxHome?.rails?.take(5)?.forEach { add(it) }
         if (topItunes.isNotEmpty()) {
           add(
             MovieRail(
               id = "top_box_office",
               title = "Top Box Office",
-              subtitle = "Official releases & trailer previews",
+              subtitle = "Official releases & trailers",
               movies = topItunes,
             )
           )
@@ -121,7 +181,7 @@ class MovieCatalogRepository(
             MovieRail(
               id = "sci_fi_trailers",
               title = "Sci-Fi & Trailers",
-              subtitle = "Instant trailer previews",
+              subtitle = "Instant previews",
               movies = sciFiItunes,
             )
           )
@@ -130,8 +190,15 @@ class MovieCatalogRepository(
 
       CatalogFeedResult(
         spotlight = spotlight,
+        rankings = effectiveRankings,
+        anime = effectiveAnime,
+        recommendations = recommendations,
         rails = rails,
         allMovies = combined,
+        trendingKeywords =
+          trendingKeywords.ifEmpty {
+            listOf("Avatar", "Breaking Bad", "Attack on Titan", "Dune", "Action")
+          },
         isOfflineFallback = false,
       )
     } catch (e: CancellationException) {
@@ -141,11 +208,55 @@ class MovieCatalogRepository(
       fallback.forEach { cache[it.id] = it }
       CatalogFeedResult(
         spotlight = fallback.take(5),
+        rankings = fallback.mapIndexed { idx, m -> m.copy(rankPosition = idx + 1) },
+        anime = fallback.filter { it.mediaType.equals("Anime", ignoreCase = true) },
+        recommendations = fallback,
         rails = buildOfflineRails(fallback),
         allMovies = fallback,
+        trendingKeywords = listOf("Avatar", "Breaking Bad", "Anime", "Oppenheimer"),
         isOfflineFallback = true,
       )
     }
+  }
+
+  suspend fun loadGenreFeed(genre: String, page: Int = 1): List<Movie> {
+    val live =
+      runCatching {
+        movieBox.getMovies(page = page, perPage = 24, sort = "RECOMMEND", genre = genre) +
+          movieBox.getTvSeries(page = page, perPage = 16, sort = "RECOMMEND", genre = genre)
+      }.getOrDefault(emptyList()).distinctBy { it.id }
+    live.forEach { cache[it.id] = it }
+    return live
+  }
+
+  suspend fun loadMorePage(isSeries: Boolean, isAnime: Boolean, page: Int): List<Movie> {
+    val fetched =
+      when {
+        isAnime -> runCatching { movieBox.getAnime(page = page, perPage = 24) }.getOrDefault(emptyList())
+        isSeries -> runCatching { movieBox.getTvSeries(page = page, perPage = 24) }.getOrDefault(emptyList())
+        else -> runCatching { movieBox.getMovies(page = page, perPage = 24) }.getOrDefault(emptyList())
+      }
+    fetched.forEach { cache[it.id] = it }
+    return fetched
+  }
+
+  suspend fun getRecommendations(subjectId: String, genreHint: String? = null): List<Movie> {
+    val remote =
+      if (subjectId.isNotBlank()) {
+        runCatching { movieBox.getRecommendations(subjectId) }.getOrDefault(emptyList())
+      } else {
+        emptyList()
+      }
+    remote.forEach { cache[it.id] = it }
+    if (remote.isNotEmpty()) return remote
+    val pool = (cache.values.toList() + OfflineCatalogFallback.movies).distinctBy { it.id }
+    val matching =
+      if (!genreHint.isNullOrBlank()) {
+        pool.filter { it.genre.contains(genreHint, ignoreCase = true) && it.subjectId != subjectId }
+      } else {
+        emptyList()
+      }
+    return (matching + pool.filter { it.subjectId != subjectId }).distinctBy { it.id }.take(12)
   }
 
   suspend fun searchMovies(query: String): Pair<List<Movie>, Boolean> = coroutineScope {
@@ -156,7 +267,7 @@ class MovieCatalogRepository(
     }
     try {
       val mboxDeferred = async {
-        runCatching { movieBox.search(cleanQuery, page = 1, perPage = 20) }
+        runCatching { movieBox.search(cleanQuery, page = 1, perPage = 24) }
           .getOrDefault(emptyList())
       }
       val itunesDeferred = async {
@@ -185,6 +296,9 @@ class MovieCatalogRepository(
     if (clean.length < 2) return emptyList()
     return runCatching { movieBox.searchSuggest(clean) }.getOrDefault(emptyList())
   }
+
+  suspend fun getTrendingKeywords(): List<String> =
+    runCatching { movieBox.getTrendingKeywords() }.getOrDefault(emptyList())
 
   suspend fun getMovieDetail(movieId: String): Movie? {
     val cached = cache[movieId]
@@ -250,6 +364,9 @@ class MovieCatalogRepository(
       movieBox.getSubtitles(subjectId = subjectId, season = season, episode = episode)
     }.getOrDefault(emptyList())
 
+  suspend fun fetchSubtitleCues(subtitleUrl: String): List<SubtitleCue> =
+    runCatching { movieBox.fetchSubtitleCues(subtitleUrl) }.getOrDefault(emptyList())
+
   fun getCachedMovie(movieId: String): Movie? =
     cache[movieId] ?: OfflineCatalogFallback.movies.firstOrNull { it.id == movieId }
 
@@ -259,12 +376,19 @@ class MovieCatalogRepository(
       .filter {
         it.title.contains(cleanQuery, ignoreCase = true) ||
           it.director.contains(cleanQuery, ignoreCase = true) ||
-          it.genre.contains(cleanQuery, ignoreCase = true)
+          it.genre.contains(cleanQuery, ignoreCase = true) ||
+          it.mediaType.contains(cleanQuery, ignoreCase = true)
       }
 
   private fun buildOfflineRails(movies: List<Movie>): List<MovieRail> =
     listOf(
       MovieRail("featured", "Featured Classics", "Offline curated collection", movies.take(6)),
+      MovieRail(
+        "anime_rail",
+        "Anime & Animation",
+        "Curated anime series & films",
+        movies.filter { it.mediaType.equals("Anime", ignoreCase = true) || it.genre.contains("Anim", true) },
+      ),
       MovieRail(
         "sci_fi",
         "Sci-Fi & Thrillers",
@@ -281,7 +405,7 @@ class MovieCatalogRepository(
         "Essential stories",
         movies.filter {
           it.genre.contains("Drama", ignoreCase = true) ||
-            it.genre.contains("Animation", ignoreCase = true)
+            it.genre.contains("Crime", ignoreCase = true)
         },
       ),
     ).filter { it.movies.isNotEmpty() }
@@ -396,6 +520,7 @@ private object OfflineCatalogFallback {
           "Miles Morales catapults across the Multiverse, where he encounters a team of Spider-People charged with protecting its very existence.",
         runtimeMinutes = 140,
         contentRating = "PG",
+        mediaType = "Anime",
       ),
       Movie(
         id = "itunes_1488022263",

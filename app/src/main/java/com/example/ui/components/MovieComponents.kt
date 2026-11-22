@@ -126,6 +126,7 @@ fun MoviePosterCard(
   savedEntry: SavedMovieEntry?,
   onClick: () -> Unit,
   onToggleWatchlist: () -> Unit,
+  rankOverride: Int? = null,
   modifier: Modifier = Modifier,
 ) {
   Column(
@@ -191,7 +192,25 @@ fun MoviePosterCard(
         )
       }
 
-      if (savedEntry?.favorite == true) {
+      val displayRank = rankOverride ?: movie.rankPosition
+      if (displayRank != null) {
+        Surface(
+          color =
+            if (displayRank <= 3) MaterialTheme.colorScheme.primary
+            else Color.Black.copy(alpha = 0.82f),
+          shape = MaterialTheme.shapes.small,
+          modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+        ) {
+          Text(
+            text = "#$displayRank",
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+            color =
+              if (displayRank <= 3) MaterialTheme.colorScheme.onPrimary
+              else MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+          )
+        }
+      } else if (savedEntry?.favorite == true) {
         Surface(
           color = MaterialTheme.colorScheme.secondary,
           shape = CircleShape,
@@ -235,7 +254,19 @@ fun MoviePosterCard(
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
           )
         }
-        if (movie.mediaType.equals("Series", ignoreCase = true)) {
+        if (movie.mediaType.equals("Anime", ignoreCase = true)) {
+          Surface(
+            color = MaterialTheme.colorScheme.secondary,
+            shape = MaterialTheme.shapes.extraSmall,
+          ) {
+            Text(
+              text = "ANIME",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSecondary,
+              modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+            )
+          }
+        } else if (movie.mediaType.equals("Series", ignoreCase = true)) {
           Surface(
             color = MaterialTheme.colorScheme.tertiary,
             shape = MaterialTheme.shapes.extraSmall,
@@ -300,6 +331,7 @@ fun HeroSpotlightCard(
   savedEntry: SavedMovieEntry?,
   onOpenDetail: () -> Unit,
   onToggleWatchlist: () -> Unit,
+  onPlayNow: (() -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
   Card(
@@ -383,13 +415,14 @@ fun HeroSpotlightCard(
           verticalAlignment = Alignment.CenterVertically,
         ) {
           Button(
-            onClick = onOpenDetail,
+            onClick = { onPlayNow?.invoke() ?: onOpenDetail() },
             shape = MaterialTheme.shapes.large,
             colors =
               ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
               ),
+            modifier = Modifier.testTag("hero_play_button_${movie.id}"),
           ) {
             Icon(
               imageVector = Icons.Filled.PlayArrow,
@@ -399,7 +432,8 @@ fun HeroSpotlightCard(
             Spacer(modifier = Modifier.width(6.dp))
             Text(
               text =
-                if (movie.subjectId.isNotBlank()) "Streams & Download"
+                if (onPlayNow != null) "Watch Now"
+                else if (movie.subjectId.isNotBlank()) "Streams & Download"
                 else if (movie.previewUrl != null) "Watch Trailer"
                 else "View Details",
               style = MaterialTheme.typography.labelLarge,

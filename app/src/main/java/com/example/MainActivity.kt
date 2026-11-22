@@ -4,6 +4,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.settings.AppSettingsRepository
+import com.example.data.settings.AppThemeMode
 import com.example.ui.navigation.DecanApp
 import com.example.ui.theme.DecanMovieTheme
 
@@ -12,8 +17,10 @@ class MainActivity : ComponentActivity() {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
     setContent {
-      DecanMovieTheme {
-        DecanApp()
+      val settingsRepository = remember(applicationContext) { AppSettingsRepository(applicationContext) }
+      val appSettings by settingsRepository.settings.collectAsStateWithLifecycle()
+      DecanMovieTheme(darkTheme = appSettings.themeMode == AppThemeMode.DARK) {
+        DecanApp(settingsRepository = settingsRepository)
       }
     }
   }
