@@ -101,9 +101,11 @@ import kotlinx.coroutines.launch
 fun MovieDetailScreen(
   movieId: String,
   savedEntry: SavedMovieEntry?,
+  savedLibraryMap: Map<String, SavedMovieEntry>,
   catalogRepository: MovieCatalogRepository,
   allowMeteredDownloads: Boolean,
   includeSubtitlesInBatch: Boolean,
+  notifyDownloads: Boolean = true,
   isSaving: Boolean,
   onBack: () -> Unit,
   onSwitchSubject: (String) -> Unit,
@@ -820,7 +822,7 @@ fun MovieDetailScreen(
             items(recommendations, key = { it.id }) { rec ->
               MoviePosterCard(
                 movie = rec,
-                savedEntry = null,
+                savedEntry = savedLibraryMap[rec.id],
                 onClick = { onOpenMovie(rec) },
                 onToggleWatchlist = { onToggleQuickWatchlist(rec) },
                 modifier = Modifier.width(136.dp),
@@ -842,6 +844,7 @@ fun MovieDetailScreen(
       catalogRepository = catalogRepository,
       allowMetered = allowMeteredDownloads,
       defaultIncludeSubs = includeSubtitlesInBatch,
+      notifyDownloads = notifyDownloads,
       onDismiss = { showBatchSheet = false },
       onNotify = onNotify,
     )

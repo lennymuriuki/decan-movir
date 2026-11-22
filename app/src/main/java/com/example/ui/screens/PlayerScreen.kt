@@ -124,6 +124,7 @@ import com.example.data.remote.moviebox.MovieBoxSubtitle
 import com.example.data.remote.moviebox.SrtParser
 import com.example.data.remote.moviebox.SubtitleCue
 import com.example.data.settings.AppSettings
+import com.example.data.settings.PlaybackProgressStore
 import com.example.ui.components.BatchDownloadSheet
 import com.example.ui.components.MoviePosterImage
 import kotlinx.coroutines.async
@@ -136,11 +137,13 @@ fun PlayerScreen(
   movieId: String,
   initialSeason: Int = 0,
   initialEpisode: Int = 0,
+  initialPositionMs: Long = 0L,
   localPlayUri: String? = null,
   localTitle: String? = null,
   savedEntry: SavedMovieEntry?,
   catalogRepository: MovieCatalogRepository,
   appSettings: AppSettings,
+  progressStore: PlaybackProgressStore? = null,
   onBack: () -> Unit,
   onSwitchMovie: (String) -> Unit,
   onToggleWatchlist: (Movie) -> Unit,
@@ -185,11 +188,17 @@ fun PlayerScreen(
   var currentPositionMs by remember { mutableLongStateOf(0L) }
   var durationMs by remember { mutableLongStateOf(0L) }
   var seekDragMs by remember { mutableStateOf<Long?>(null) }
-  var pendingSeekMs by remember { mutableLongStateOf(0L) }
+  var pendingSeekMs by remember(movieId) {
+    val savedResume =
+      if (initialPositionMs > 0L) initialPositionMs
+      else progressStore?.getProgress(movieId)?.positionMs ?: 0L
+    mutableLongStateOf(savedResume)
+  }
   var videoWidth by remember { mutableIntStateOf(16) }
   var videoHeight by remember { mutableIntStateOf(9) }
   var seekFeedbackText by remember { mutableStateOf<String?>(null) }
   var surfaceHolderRef by remember { mutableStateOf<SurfaceHolder?>(null) }
+  var upNextDismissed by remember(selectedSeason, selectedEpisode, activeMovieId) { mutableStateOf(false) }
 
   // Fullscreen orientation & immersive system bar management
   LaunchedEffect(isFullscreen) {
@@ -213,6 +222,19 @@ fun PlayerScreen(
 
   DisposableEffect(Unit) {
     onDispose {
+      val currentM = movie
+      if (localPlayUri.isNullOrBlank() && currentM != null && currentPositionMs > 3_000L) {
+        progressStore?.saveProgress(
+          movieId = currentM.id,
+          title = currentM.title,
+          posterUrl = currentM.posterUrl,
+          mediaType = currentM.mediaType,
+          season = selectedSeason,
+          episode = selectedEpisode,
+          positionMs = currentPositionMs,
+          durationMs = durationMs,
+        )
+      }
       if (activity != null) {
         activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         activity.window?.let { window ->
@@ -376,6 +398,9 @@ fun PlayerScreen(
     val holder = surfaceHolderRef ?: return@LaunchedEffect
     val url = playbackUrl ?: return@LaunchedEffect
 
+    if (currentPositionMs > 2_000L && pendingSeekMs == 0L) {
+      pendingSeekMs = currentPositionMs
+    }
     runCatching {
       mediaPlayer?.stop()
       mediaPlayer?.release()
@@ -461,8 +486,9 @@ fun PlayerScreen(
     }
   }
 
-  // Poll MediaPlayer currentPosition every 250ms for seekbar + live SRT subtitles
+  // Poll MediaPlayer currentPosition every 250ms for seekbar + live SRT subtitles + periodic progress save
   LaunchedEffect(mediaPlayer, isPlaying) {
+    var tickCount = 0
     while (true) {
       val mp = mediaPlayer
       if (mp != null) {
@@ -471,6 +497,22 @@ fun PlayerScreen(
             currentPositionMs = mp.currentPosition.toLong()
             if (durationMs <= 0L) {
               durationMs = mp.duration.toLong().coerceAtLeast(0L)
+            }
+            tickCount++
+            if (tickCount % 20 == 0 && localPlayUri.isNullOrBlank()) {
+              val m = movie
+              if (m != null && currentPositionMs > 3_000L) {
+                progressStore?.saveProgress(
+                  movieId = m.id,
+                  title = m.title,
+                  posterUrl = m.posterUrl,
+                  mediaType = m.mediaType,
+                  season = selectedSeason,
+                  episode = selectedEpisode,
+                  positionMs = currentPositionMs,
+                  durationMs = durationMs,
+                )
+              }
             }
           }
         }
@@ -676,6 +718,49 @@ fun PlayerScreen(
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
           )
+        }
+      }
+
+      // Up-Next Episode Countdown Pill (last 15s when auto-play enabled)
+      val currentSeasonObjForNext = seasons.firstOrNull { it.season == selectedSeason }
+      val hasNextEpInSeries =
+        seasons.isNotEmpty() &&
+          ((currentSeasonObjForNext != null && selectedEpisode < currentSeasonObjForNext.episodeCount) ||
+            seasons.any { it.season > selectedSeason })
+      val remainingSec = ((durationMs - currentPositionMs) / 1000L).toInt()
+      if (
+        appSettings.autoPlayNextEpisode &&
+          hasNextEpInSeries &&
+          !upNextDismissed &&
+          durationMs > 30_000L &&
+          remainingSec in 1..15 &&
+          isPlaying
+      ) {
+        Surface(
+          color = Color.Black.copy(alpha = 0.85f),
+          shape = MaterialTheme.shapes.large,
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+          modifier =
+            Modifier.align(Alignment.BottomEnd)
+              .padding(end = 14.dp, bottom = if (controlsVisible) 66.dp else 16.dp),
+        ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            Text(
+              text = "Next Ep in ${remainingSec}s",
+              style = MaterialTheme.typography.labelLarge,
+              color = Color.White,
+            )
+            TextButton(onClick = { goToNextEpisode() }) {
+              Text("Play Now", color = MaterialTheme.colorScheme.primary)
+            }
+            TextButton(onClick = { upNextDismissed = true }) {
+              Text("Cancel", color = Color.White.copy(alpha = 0.7f))
+            }
+          }
         }
       }
 
@@ -1508,6 +1593,7 @@ fun PlayerScreen(
       catalogRepository = catalogRepository,
       allowMetered = appSettings.allowMeteredDownloads,
       defaultIncludeSubs = appSettings.includeSubtitlesInBatch,
+      notifyDownloads = appSettings.enableDownloadNotifications,
       onDismiss = { showBatchDownloadSheet = false },
       onNotify = onNotify,
     )

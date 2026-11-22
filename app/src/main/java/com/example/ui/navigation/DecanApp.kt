@@ -1,5 +1,10 @@
 package com.example.ui.navigation
 
+import android.app.DownloadManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -51,6 +56,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,6 +65,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.credentials.CredentialManager
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -72,9 +79,11 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.example.NotificationDeepLink
 import com.example.R
 import com.example.auth.AuthScreen
 import com.example.auth.signOut
+import com.example.data.download.StreamDownloadManager
 import com.example.data.firebase.MovieLibraryRepository
 import com.example.data.model.Movie
 import com.example.data.model.SavedMovieEntry
@@ -83,6 +92,9 @@ import com.example.data.model.WatchStatus
 import com.example.data.remote.MovieCatalogRepository
 import com.example.data.settings.AppSettings
 import com.example.data.settings.AppSettingsRepository
+import com.example.data.settings.PlaybackProgressStore
+import com.example.notifications.DecanNotificationManager
+import com.example.ui.components.NotificationCenterSheet
 import com.example.ui.screens.DiscoverScreen
 import com.example.ui.screens.DownloadsScreen
 import com.example.ui.screens.LibraryScreen
@@ -119,25 +131,36 @@ private enum class TopTab(
 
 private const val ROUTE_DETAIL = "detail/{movieId}"
 private const val ROUTE_PLAYER =
-  "player?movieId={movieId}&se={se}&ep={ep}&localUri={localUri}&localTitle={localTitle}"
+  "player?movieId={movieId}&se={se}&ep={ep}&pos={pos}&localUri={localUri}&localTitle={localTitle}"
+
+private fun buildDetailRoute(movieId: String): String = "detail/${Uri.encode(movieId)}"
 
 private fun buildPlayerRoute(
   movieId: String = "",
   season: Int = 0,
   episode: Int = 0,
+  positionMs: Long = 0L,
   localUri: String = "",
   localTitle: String = "",
 ): String {
-  return "player?movieId=${Uri.encode(movieId)}&se=$season&ep=$episode&localUri=${Uri.encode(localUri)}&localTitle=${Uri.encode(localTitle)}"
+  return "player?movieId=${Uri.encode(movieId)}&se=$season&ep=$episode&pos=$positionMs&localUri=${Uri.encode(localUri)}&localTitle=${Uri.encode(localTitle)}"
 }
 
 @Composable
-fun DecanApp(settingsRepository: AppSettingsRepository) {
+fun DecanApp(
+  settingsRepository: AppSettingsRepository,
+  pendingDeepLink: NotificationDeepLink? = null,
+  onConsumedDeepLink: () -> Unit = {},
+) {
   val context = LocalContext.current
   val isFirebaseReady = remember(context) { FirebaseApp.getApps(context).isNotEmpty() }
 
   if (!isFirebaseReady) {
-    CatalogOnlyDecanApp(settingsRepository = settingsRepository)
+    CatalogOnlyDecanApp(
+      settingsRepository = settingsRepository,
+      pendingDeepLink = pendingDeepLink,
+      onConsumedDeepLink = onConsumedDeepLink,
+    )
     return
   }
 
@@ -154,13 +177,22 @@ fun DecanApp(settingsRepository: AppSettingsRepository) {
     AuthScreen(onAuthSuccess = { currentUser = Firebase.auth.currentUser })
   } else {
     key(user.uid) {
-      AuthenticatedDecanApp(user = user, settingsRepository = settingsRepository)
+      AuthenticatedDecanApp(
+        user = user,
+        settingsRepository = settingsRepository,
+        pendingDeepLink = pendingDeepLink,
+        onConsumedDeepLink = onConsumedDeepLink,
+      )
     }
   }
 }
 
 @Composable
-private fun CatalogOnlyDecanApp(settingsRepository: AppSettingsRepository) {
+private fun CatalogOnlyDecanApp(
+  settingsRepository: AppSettingsRepository,
+  pendingDeepLink: NotificationDeepLink?,
+  onConsumedDeepLink: () -> Unit,
+) {
   val scope = rememberCoroutineScope()
   val catalogRepository = remember { MovieCatalogRepository() }
   val discoverViewModel: DiscoverViewModel =
@@ -195,6 +227,8 @@ private fun CatalogOnlyDecanApp(settingsRepository: AppSettingsRepository) {
     savedLibraryMap = emptyMap(),
     selectedLibraryFilter = LibraryFilter.ALL,
     isSavingLibrary = false,
+    pendingDeepLink = pendingDeepLink,
+    onConsumedDeepLink = onConsumedDeepLink,
     snackbarHostState = snackbarHostState,
     onNotify = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } },
     onSelectLibraryFilter = {},
@@ -218,6 +252,8 @@ private fun CatalogOnlyDecanApp(settingsRepository: AppSettingsRepository) {
 private fun AuthenticatedDecanApp(
   user: FirebaseUser,
   settingsRepository: AppSettingsRepository,
+  pendingDeepLink: NotificationDeepLink?,
+  onConsumedDeepLink: () -> Unit,
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
@@ -294,6 +330,8 @@ private fun AuthenticatedDecanApp(
     savedLibraryMap = savedLibraryMap,
     selectedLibraryFilter = selectedLibraryFilter,
     isSavingLibrary = isSaving,
+    pendingDeepLink = pendingDeepLink,
+    onConsumedDeepLink = onConsumedDeepLink,
     snackbarHostState = snackbarHostState,
     onNotify = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } },
     onSelectLibraryFilter = libraryViewModel::selectFilter,
@@ -325,6 +363,8 @@ private fun DecanMainShell(
   savedLibraryMap: Map<String, SavedMovieEntry>,
   selectedLibraryFilter: LibraryFilter,
   isSavingLibrary: Boolean,
+  pendingDeepLink: NotificationDeepLink?,
+  onConsumedDeepLink: () -> Unit,
   snackbarHostState: SnackbarHostState,
   onNotify: (String) -> Unit,
   onSelectLibraryFilter: (LibraryFilter) -> Unit,
@@ -334,14 +374,71 @@ private fun DecanMainShell(
   onRemoveLibraryMovie: (String, String) -> Unit,
   onSignOut: (() -> Unit)?,
 ) {
+  val context = LocalContext.current
+  val progressStore = remember(context) { PlaybackProgressStore(context) }
+
   val discoverState by discoverViewModel.uiState.collectAsStateWithLifecycle()
   val searchState by searchViewModel.uiState.collectAsStateWithLifecycle()
   val updateState by updateViewModel.uiState.collectAsStateWithLifecycle()
   val appSettings: AppSettings by settingsRepository.settings.collectAsStateWithLifecycle()
+  val continueWatching by progressStore.items.collectAsStateWithLifecycle()
+  val notifications by DecanNotificationManager.notifications.collectAsStateWithLifecycle()
+  val unreadNotifications = remember(notifications) { notifications.count { !it.isRead } }
+
+  var showNotificationSheet by remember { mutableStateOf(false) }
+
+  val currentSettingsState by rememberUpdatedState(appSettings)
+
+  // Listen for Android DownloadManager completion broadcasts for instant download alerts
+  DisposableEffect(context) {
+    val receiver =
+      object : BroadcastReceiver() {
+        override fun onReceive(ctx: Context?, intent: Intent?) {
+          if (intent?.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
+          val downloadId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
+          if (downloadId <= 0L) return
+          val task = StreamDownloadManager.queryDownloadById(context, downloadId) ?: return
+          if (task.isCompleted) {
+            DecanNotificationManager.notifyDownloadCompleted(
+              context = context,
+              downloadTitle = task.title,
+              systemEnabled = currentSettingsState.enableDownloadNotifications,
+            )
+          }
+        }
+      }
+    ContextCompat.registerReceiver(
+      context,
+      receiver,
+      IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+      ContextCompat.RECEIVER_EXPORTED,
+    )
+    onDispose { runCatching { context.unregisterReceiver(receiver) } }
+  }
 
   LaunchedEffect(Unit) {
+    DecanNotificationManager.ensureInitialized(context)
     if (!updateState.checkedOnce) {
       updateViewModel.checkForUpdates(appSettings.githubRepo)
+    }
+  }
+
+  // Trigger a release notification once per newly detected GitHub Release tag
+  LaunchedEffect(updateState.latestRelease, appSettings.enableReleaseNotifications) {
+    val latest = updateState.latestRelease
+    if (
+      latest != null &&
+        latest.isNewerThanCurrent &&
+        latest.tagName != appSettings.lastNotifiedReleaseTag
+    ) {
+      settingsRepository.markReleaseTagNotified(latest.tagName)
+      DecanNotificationManager.notifyReleaseAvailable(
+        context = context,
+        tagName = latest.tagName,
+        releaseTitle = latest.title,
+        releaseUrl = latest.htmlUrl,
+        systemEnabled = appSettings.enableReleaseNotifications,
+      )
     }
   }
 
@@ -356,6 +453,18 @@ private fun DecanMainShell(
       launchSingleTop = true
       restoreState = true
     }
+  }
+
+  // Handle Notification Deep-Links
+  LaunchedEffect(pendingDeepLink) {
+    val link = pendingDeepLink ?: return@LaunchedEffect
+    if (!link.movieId.isNullOrBlank()) {
+      navController.navigate(buildDetailRoute(link.movieId))
+    } else if (!link.tab.isNullOrBlank()) {
+      val tab = TopTab.entries.firstOrNull { it.route == link.tab }
+      if (tab != null) navigateTopTab(tab)
+    }
+    onConsumedDeepLink()
   }
 
   BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -450,22 +559,39 @@ private fun DecanMainShell(
                 uiState = discoverState,
                 updateState = updateState,
                 savedLibraryMap = savedLibraryMap,
+                continueWatching = continueWatching,
+                unreadNotifications = unreadNotifications,
                 onRefresh = discoverViewModel::refreshCatalog,
                 onSelectMediaFilter = discoverViewModel::selectMediaFilter,
                 onSelectGenre = discoverViewModel::selectGenre,
-                onOpenMovie = { movie -> navController.navigate("detail/${movie.id}") },
+                onOpenMovie = { movie -> navController.navigate(buildDetailRoute(movie.id)) },
                 onPlayMovie = { movie ->
+                  val isSeries =
+                    movie.mediaType.equals("Series", ignoreCase = true) ||
+                      movie.mediaType.equals("Anime", ignoreCase = true)
                   navController.navigate(
                     buildPlayerRoute(
                       movieId = movie.id,
-                      season = if (movie.mediaType.equals("Series", ignoreCase = true) || movie.mediaType.equals("Anime", ignoreCase = true)) 1 else 0,
-                      episode = if (movie.mediaType.equals("Series", ignoreCase = true) || movie.mediaType.equals("Anime", ignoreCase = true)) 1 else 0,
+                      season = if (isSeries) 1 else 0,
+                      episode = if (isSeries) 1 else 0,
                     )
                   )
                 },
+                onResumeWatching = { cw ->
+                  navController.navigate(
+                    buildPlayerRoute(
+                      movieId = cw.movieId,
+                      season = cw.season,
+                      episode = cw.episode,
+                      positionMs = cw.positionMs,
+                    )
+                  )
+                },
+                onRemoveContinueWatching = progressStore::removeProgress,
                 onToggleWatchlist = onToggleQuickWatchlist,
                 onLoadMore = discoverViewModel::loadMoreForActiveFilter,
                 onOpenDownloads = { navigateTopTab(TopTab.DOWNLOADS) },
+                onOpenNotifications = { showNotificationSheet = true },
                 onOpenSettings = { navigateTopTab(TopTab.SETTINGS) },
                 modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
               )
@@ -477,10 +603,12 @@ private fun DecanMainShell(
                 savedLibraryMap = savedLibraryMap,
                 onQueryChange = searchViewModel::onQueryChange,
                 onSubmitSearch = searchViewModel::submitSearch,
-                onSelectSuggestion = { sug -> navController.navigate("detail/mbox_${sug.subjectId}") },
+                onSelectSuggestion = { sug ->
+                  navController.navigate(buildDetailRoute("mbox_${sug.subjectId}"))
+                },
                 onSelectGenre = searchViewModel::selectGenre,
                 onSelectSort = searchViewModel::selectSortOption,
-                onOpenMovie = { movie -> navController.navigate("detail/${movie.id}") },
+                onOpenMovie = { movie -> navController.navigate(buildDetailRoute(movie.id)) },
                 onToggleWatchlist = onToggleQuickWatchlist,
                 modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
               )
@@ -546,7 +674,7 @@ private fun DecanMainShell(
                   selectedFilter = selectedLibraryFilter,
                   onSelectFilter = onSelectLibraryFilter,
                   onOpenMovie = { entry ->
-                    navController.navigate("detail/${entry.movieId.ifBlank { entry.id }}")
+                    navController.navigate(buildDetailRoute(entry.movieId.ifBlank { entry.id }))
                   },
                   onToggleFavorite = onToggleFavorite,
                   onRemoveEntry = { entry ->
@@ -575,6 +703,34 @@ private fun DecanMainShell(
                 onSetDefaultPlaybackSpeed = settingsRepository::setDefaultPlaybackSpeed,
                 onSetAllowMeteredDownloads = settingsRepository::setAllowMeteredDownloads,
                 onSetIncludeSubtitlesInBatch = settingsRepository::setIncludeSubtitlesInBatch,
+                onSetEnableDownloadNotifications = settingsRepository::setEnableDownloadNotifications,
+                onSetEnableReleaseNotifications = settingsRepository::setEnableReleaseNotifications,
+                onSetEnableTrendingNotifications = settingsRepository::setEnableTrendingNotifications,
+                onSendTestNotification = {
+                  val topPick =
+                    discoverState.rankings.firstOrNull()
+                      ?: discoverState.spotlight.firstOrNull()
+                  if (topPick != null) {
+                    DecanNotificationManager.notifyTrendingPick(
+                      context = context,
+                      movieTitle = topPick.title,
+                      movieId = topPick.id,
+                      subtitle =
+                        "${topPick.genre} • ${topPick.releaseYear} — Watch in HD Theater Player now.",
+                      systemEnabled = appSettings.enableTrendingNotifications,
+                    )
+                    onNotify("Sent alert for ${topPick.title}")
+                  } else {
+                    DecanNotificationManager.notifyTrendingPick(
+                      context = context,
+                      movieTitle = "Decan Cinema Spotlight",
+                      movieId = "",
+                      subtitle = "Notifications are active for downloads, updates, and top picks.",
+                      systemEnabled = appSettings.enableTrendingNotifications,
+                    )
+                    onNotify("Sent test cinema alert")
+                  }
+                },
                 onSaveGithubRepo = settingsRepository::setGithubRepo,
                 onCheckUpdates = { updateViewModel.checkForUpdates(appSettings.githubRepo) },
                 onNotify = onNotify,
@@ -586,18 +742,20 @@ private fun DecanMainShell(
               route = ROUTE_DETAIL,
               arguments = listOf(navArgument("movieId") { type = NavType.StringType }),
             ) { entry ->
-              val movieId = entry.arguments?.getString("movieId").orEmpty()
+              val movieId = Uri.decode(entry.arguments?.getString("movieId").orEmpty())
               MovieDetailScreen(
                 movieId = movieId,
                 savedEntry = savedLibraryMap[movieId],
+                savedLibraryMap = savedLibraryMap,
                 catalogRepository = catalogRepository,
                 allowMeteredDownloads = appSettings.allowMeteredDownloads,
                 includeSubtitlesInBatch = appSettings.includeSubtitlesInBatch,
+                notifyDownloads = appSettings.enableDownloadNotifications,
                 isSaving = isSavingLibrary,
                 onBack = { navController.popBackStack() },
                 onSwitchSubject = { targetId ->
-                  navController.navigate("detail/$targetId") {
-                    popUpTo("detail/$movieId") { inclusive = true }
+                  navController.navigate(buildDetailRoute(targetId)) {
+                    popUpTo(buildDetailRoute(movieId)) { inclusive = true }
                   }
                 },
                 onOpenPlayer = { movie, se, ep ->
@@ -605,7 +763,7 @@ private fun DecanMainShell(
                     buildPlayerRoute(movieId = movie.id, season = se, episode = ep)
                   )
                 },
-                onOpenMovie = { rec -> navController.navigate("detail/${rec.id}") },
+                onOpenMovie = { rec -> navController.navigate(buildDetailRoute(rec.id)) },
                 onToggleQuickWatchlist = onToggleQuickWatchlist,
                 onNotify = onNotify,
                 onSaveEntry = onSaveEntryDetails,
@@ -632,6 +790,10 @@ private fun DecanMainShell(
                     type = NavType.IntType
                     defaultValue = 0
                   },
+                  navArgument("pos") {
+                    type = NavType.LongType
+                    defaultValue = 0L
+                  },
                   navArgument("localUri") {
                     type = NavType.StringType
                     defaultValue = ""
@@ -645,6 +807,7 @@ private fun DecanMainShell(
               val rawMovieId = entry.arguments?.getString("movieId").orEmpty()
               val se = entry.arguments?.getInt("se") ?: 0
               val ep = entry.arguments?.getInt("ep") ?: 0
+              val pos = entry.arguments?.getLong("pos") ?: 0L
               val rawLocalUri = entry.arguments?.getString("localUri").orEmpty()
               val rawLocalTitle = entry.arguments?.getString("localTitle").orEmpty()
 
@@ -658,11 +821,13 @@ private fun DecanMainShell(
                 movieId = decodedMovieId,
                 initialSeason = se,
                 initialEpisode = ep,
+                initialPositionMs = pos,
                 localPlayUri = decodedLocalUri,
                 localTitle = decodedLocalTitle,
                 savedEntry = savedLibraryMap[decodedMovieId],
                 catalogRepository = catalogRepository,
                 appSettings = appSettings,
+                progressStore = progressStore,
                 onBack = { navController.popBackStack() },
                 onSwitchMovie = { targetId ->
                   navController.navigate(buildPlayerRoute(movieId = targetId)) {
@@ -677,5 +842,31 @@ private fun DecanMainShell(
         }
       }
     }
+  }
+
+  if (showNotificationSheet) {
+    NotificationCenterSheet(
+      notifications = notifications,
+      onMarkAllRead = { DecanNotificationManager.markAllRead(context) },
+      onClearAll = { DecanNotificationManager.clearAll(context) },
+      onNotificationClick = { item ->
+        DecanNotificationManager.markRead(context, item.id)
+        showNotificationSheet = false
+        when {
+          !item.targetMovieId.isNullOrBlank() ->
+            navController.navigate(buildDetailRoute(item.targetMovieId))
+          !item.targetTab.isNullOrBlank() -> {
+            val tab = TopTab.entries.firstOrNull { it.route == item.targetTab }
+            if (tab != null) navigateTopTab(tab)
+          }
+          !item.externalUrl.isNullOrBlank() -> {
+            runCatching {
+              context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.externalUrl)))
+            }
+          }
+        }
+      },
+      onDismiss = { showNotificationSheet = false },
+    )
   }
 }

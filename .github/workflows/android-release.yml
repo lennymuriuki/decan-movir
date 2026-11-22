@@ -13,7 +13,12 @@ on:
       release_notes:
         description: 'Optional release summary'
         required: false
-        default: 'Decan Movie Android release with MovieBox 1080p streaming, batch downloads, anime, rankings, and Netflix-style theater player.'
+        default: 'Decan Movie Android release with Theater Player, batch downloads, notifications, anime, and top rankings.'
+      is_prerelease:
+        description: 'Mark as pre-release on GitHub'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -26,6 +31,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -64,7 +71,7 @@ jobs:
             fi
           fi
 
-      - name: Resolve version tag
+      - name: Resolve version tag and BuildConfig version
         id: meta
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -72,15 +79,27 @@ jobs:
           else
             TAG="${GITHUB_REF_NAME}"
           fi
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          case "$TAG" in
+            v*) ;;
+            *) TAG="v${TAG}" ;;
+          esac
           CLEAN_VER="${TAG#v}"
+          VER_CODE="${GITHUB_RUN_NUMBER:-1}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version_name=${CLEAN_VER}" >> "$GITHUB_OUTPUT"
+          echo "version_code=${VER_CODE}" >> "$GITHUB_OUTPUT"
 
       - name: Run Unit Tests
-        run: gradle :app:testDebugUnitTest --no-daemon
+        run: >
+          gradle :app:testDebugUnitTest --no-daemon
+          -PappVersionName=${{ steps.meta.outputs.version_name }}
+          -PappVersionCode=${{ steps.meta.outputs.version_code }}
 
       - name: Build Debug APK
-        run: gradle :app:assembleDebug --no-daemon
+        run: >
+          gradle :app:assembleDebug --no-daemon
+          -PappVersionName=${{ steps.meta.outputs.version_name }}
+          -PappVersionCode=${{ steps.meta.outputs.version_code }}
 
       - name: Prepare Release Artifacts
         run: |
@@ -96,27 +115,37 @@ jobs:
         run: |
           if [ -n "$SIGNING_KEY_BASE64" ]; then
             printf '%s' "$SIGNING_KEY_BASE64" | base64 -d > "${KEYSTORE_PATH}"
-            gradle :app:assembleRelease :app:bundleRelease --no-daemon
+            gradle :app:assembleRelease :app:bundleRelease --no-daemon \
+              -PappVersionName=${{ steps.meta.outputs.version_name }} \
+              -PappVersionCode=${{ steps.meta.outputs.version_code }}
             cp app/build/outputs/apk/release/app-release.apk "release-assets/decan-movie-${{ steps.meta.outputs.tag }}-release.apk"
             cp app/build/outputs/bundle/release/app-release.aab "release-assets/decan-movie-${{ steps.meta.outputs.tag }}.aab"
           else
             echo "SIGNING_KEY_BASE64 not set; skipping release signing."
           fi
 
-      - name: Create Git Tag (for workflow_dispatch)
-        if: github.event_name == 'workflow_dispatch'
+      - name: Generate SHA-256 Checksums
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -f "${{ steps.meta.outputs.tag }}"
-          git push origin "refs/tags/${{ steps.meta.outputs.tag }}" --force
+          cd release-assets
+          sha256sum * > checksums-sha256.txt
+
+      - name: Upload Release Artifacts to Workflow Run
+        uses: actions/upload-artifact@v4
+        with:
+          name: decan-movie-${{ steps.meta.outputs.tag }}-assets
+          path: release-assets/*
+          retention-days: 30
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: "Decan Movie ${{ steps.meta.outputs.tag }}"
-          body: ${{ github.event.inputs.release_notes || 'Automated Decan Movie Android build with MovieBox APIs, theater player, and batch downloads.' }}
+          body: ${{ github.event.inputs.release_notes || 'Automated Decan Movie Android release with Theater Player, batch downloads, notifications, anime, and top rankings.' }}
+          draft: false
+          prerelease: ${{ github.event.inputs.is_prerelease == 'true' }}
+          make_latest: true
           generate_release_notes: true
           files: |
             release-assets/*

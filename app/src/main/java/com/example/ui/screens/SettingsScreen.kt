@@ -1,7 +1,12 @@
 package com.example.ui.screens
 
+import android.Manifest
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,7 +17,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,6 +28,7 @@ import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.NewReleases
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Refresh
@@ -61,6 +66,7 @@ import coil.compose.AsyncImage
 import com.example.BuildConfig
 import com.example.data.settings.AppSettings
 import com.example.data.settings.AppThemeMode
+import com.example.notifications.DecanNotificationManager
 import com.example.ui.viewmodel.UpdateUiState
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -80,6 +86,10 @@ fun SettingsScreen(
   onSetDefaultPlaybackSpeed: (Float) -> Unit,
   onSetAllowMeteredDownloads: (Boolean) -> Unit,
   onSetIncludeSubtitlesInBatch: (Boolean) -> Unit,
+  onSetEnableDownloadNotifications: (Boolean) -> Unit,
+  onSetEnableReleaseNotifications: (Boolean) -> Unit,
+  onSetEnableTrendingNotifications: (Boolean) -> Unit,
+  onSendTestNotification: () -> Unit,
   onSaveGithubRepo: (String) -> Unit,
   onCheckUpdates: () -> Unit,
   onNotify: (String) -> Unit,
@@ -87,6 +97,17 @@ fun SettingsScreen(
 ) {
   val context = LocalContext.current
   var repoInput by remember(appSettings.githubRepo) { mutableStateOf(appSettings.githubRepo) }
+  var hasNotifPerm by remember {
+    mutableStateOf(DecanNotificationManager.hasPostPermission(context))
+  }
+  val permissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+      hasNotifPerm = granted
+      onNotify(
+        if (granted) "System notifications enabled!"
+        else "Notifications denied — alerts will still appear in the in-app bell."
+      )
+    }
 
   LazyColumn(
     modifier = modifier.fillMaxSize().testTag("settings_list"),
@@ -101,7 +122,7 @@ fun SettingsScreen(
           color = MaterialTheme.colorScheme.onBackground,
         )
         Text(
-          text = "Decan Movie v${BuildConfig.VERSION_NAME} • Theater, Downloads & GitHub Releases",
+          text = "Decan Movie v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -184,6 +205,83 @@ fun SettingsScreen(
               Spacer(modifier = Modifier.width(8.dp))
               Text("Sign Out of Google Account")
             }
+          }
+        }
+      }
+    }
+
+    // Notifications Card
+    item {
+      Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Column(
+          modifier = Modifier.padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            Icon(
+              imageVector = Icons.Filled.NotificationsActive,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+              text = "Notifications & Alerts",
+              style = MaterialTheme.typography.titleMedium,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+          }
+
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotifPerm) {
+            FilledTonalButton(
+              onClick = { permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) },
+              shape = MaterialTheme.shapes.medium,
+              modifier = Modifier.fillMaxWidth().testTag("grant_notifications_button"),
+            ) {
+              Text("Enable Android System Notifications")
+            }
+          }
+
+          SettingToggleRow(
+            title = "Download & Batch Alerts",
+            subtitle = "Notify when queued movies, episodes, and .srt subtitles complete",
+            checked = appSettings.enableDownloadNotifications,
+            onCheckedChange = onSetEnableDownloadNotifications,
+          )
+          SettingToggleRow(
+            title = "GitHub Release Update Alerts",
+            subtitle = "Notify whenever a newer Decan Movie APK release is published",
+            checked = appSettings.enableReleaseNotifications,
+            onCheckedChange = onSetEnableReleaseNotifications,
+          )
+          SettingToggleRow(
+            title = "Trending Cinema Picks",
+            subtitle = "Receive spotlight highlights from Top 10 rankings & anime drops",
+            checked = appSettings.enableTrendingNotifications,
+            onCheckedChange = onSetEnableTrendingNotifications,
+          )
+
+          OutlinedButton(
+            onClick = {
+              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotifPerm) {
+                permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+              } else {
+                onSendTestNotification()
+              }
+            },
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth().testTag("test_notification_button"),
+          ) {
+            Text(
+              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotifPerm)
+                "Grant Permission & Test Notification"
+              else "Send Test Cinema Alert"
+            )
           }
         }
       }
@@ -316,7 +414,7 @@ fun SettingsScreen(
                   val assetNames =
                     latest.assets.joinToString(", ") { "${it.name} (${it.sizeMb} MB)" }
                   Text(
-                    text = "Release APKs: $assetNames",
+                    text = "Release Assets: $assetNames",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
                   )
@@ -345,6 +443,12 @@ fun SettingsScreen(
                 }
               }
             }
+          } else if (updateState.checkedOnce && updateState.errorMessage == null) {
+            Text(
+              text = "No published GitHub releases found yet for ${appSettings.githubRepo}. Trigger 'Release Decan Movie' in GitHub Actions or push a v* tag to publish your first APK release.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
           } else if (updateState.errorMessage != null) {
             Text(
               text = "GitHub check: ${updateState.errorMessage}",
@@ -353,28 +457,64 @@ fun SettingsScreen(
             )
           }
 
-          if (updateState.recentReleases.size > 1) {
+          if (updateState.recentReleases.isNotEmpty()) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Text(
               text = "Recent Release History",
               style = MaterialTheme.typography.labelLarge,
               color = MaterialTheme.colorScheme.onSurface,
             )
-            updateState.recentReleases.take(3).forEach { rel ->
-              Text(
-                text = "• ${rel.tagName} — ${rel.title}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
+            updateState.recentReleases.take(4).forEach { rel ->
+              Row(
+                modifier =
+                  Modifier.fillMaxWidth()
+                    .clickable {
+                      runCatching {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(rel.htmlUrl)))
+                      }
+                    }
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                Text(
+                  text = "• ${rel.tagName} — ${rel.title}",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                  modifier = Modifier.weight(1f),
+                )
+                Icon(
+                  imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                  contentDescription = "Open release",
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(14.dp),
+                )
+              }
             }
           }
 
-          Text(
-            text =
-              "Publish releases automatically by pushing a tag (git tag v1.1.0 && git push origin v1.1.0) or running the Android Release workflow in GitHub Actions.",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
+          OutlinedButton(
+            onClick = {
+              val slug = appSettings.githubRepo
+              runCatching {
+                context.startActivity(
+                  Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/$slug/releases"))
+                )
+              }
+            },
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Icon(
+              imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+              contentDescription = null,
+              modifier = Modifier.size(16.dp),
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Open Releases Page on GitHub")
+          }
         }
       }
     }
@@ -448,7 +588,7 @@ fun SettingsScreen(
 
           SettingToggleRow(
             title = "Auto-Play Next Episode",
-            subtitle = "Advance automatically when a TV or anime episode finishes",
+            subtitle = "Advance automatically with countdown when a TV or anime episode finishes",
             checked = appSettings.autoPlayNextEpisode,
             onCheckedChange = onSetAutoPlayNext,
           )

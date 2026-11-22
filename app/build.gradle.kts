@@ -16,8 +16,15 @@ android {
     applicationId = "com.aistudio.decanmovie.xkqmvz"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    val ciVersionCode =
+      (providers.gradleProperty("appVersionCode").orNull ?: System.getenv("APP_VERSION_CODE"))
+        ?.toIntOrNull() ?: 1
+    val ciVersionName =
+      providers.gradleProperty("appVersionName").orNull
+        ?: System.getenv("APP_VERSION_NAME")
+        ?: "1.0"
+    versionCode = ciVersionCode
+    versionName = ciVersionName
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

@@ -65,6 +65,7 @@ import com.example.data.remote.MovieCatalogRepository
 import com.example.data.remote.moviebox.MovieBoxSeason
 import com.example.data.remote.moviebox.MovieBoxStream
 import com.example.data.remote.moviebox.MovieBoxSubtitle
+import com.example.notifications.DecanNotificationManager
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 
@@ -79,6 +80,7 @@ fun BatchDownloadSheet(
   catalogRepository: MovieCatalogRepository,
   allowMetered: Boolean,
   defaultIncludeSubs: Boolean,
+  notifyDownloads: Boolean = true,
   onDismiss: () -> Unit,
   onNotify: (String) -> Unit,
 ) {
@@ -480,6 +482,14 @@ fun BatchDownloadSheet(
                 progressDone++
               }
               isQueueing = false
+              if (queuedCount > 0) {
+                DecanNotificationManager.notifyBatchQueued(
+                  context = context,
+                  movieTitle = movie.title,
+                  fileCount = queuedCount,
+                  systemEnabled = notifyDownloads,
+                )
+              }
               onNotify("Queued $queuedCount files to Downloads/DecanMovie (${if (failedCount > 0) "$failedCount unavailable" else "ready"})")
               onDismiss()
             }
@@ -496,6 +506,14 @@ fun BatchDownloadSheet(
                 episode = 0,
                 allowMetered = allowMetered,
               )
+            if (result.queuedFiles > 0) {
+              DecanNotificationManager.notifyBatchQueued(
+                context = context,
+                movieTitle = movie.title,
+                fileCount = result.queuedFiles,
+                systemEnabled = notifyDownloads,
+              )
+            }
             onNotify("Queued ${result.queuedFiles} file(s) to Downloads/DecanMovie")
             onDismiss()
           }

@@ -2,6 +2,7 @@ package com.example.data.download
 
 import android.app.DownloadManager
 import android.content.Context
+import android.database.Cursor
 import android.net.Uri
 import android.os.Environment
 import androidx.compose.runtime.Immutable
@@ -15,6 +16,7 @@ data class DownloadTaskInfo(
   val description: String,
   val status: Int,
   val statusLabel: String,
+  val reasonHint: String?,
   val bytesDownloaded: Long,
   val totalBytes: Long,
   val progressFraction: Float,
@@ -38,9 +40,11 @@ data class DownloadTaskInfo(
       mimeType?.startsWith("video/") == true ||
         localUri?.endsWith(".mp4", ignoreCase = true) == true ||
         localUri?.endsWith(".mkv", ignoreCase = true) == true ||
-        title.contains("1080") ||
-        title.contains("720") ||
-        title.contains("480")
+        (!title.contains("(.srt)", ignoreCase = true) &&
+          (title.contains("1080") ||
+            title.contains("720") ||
+            title.contains("480") ||
+            title.contains("360")))
 }
 
 data class BatchEnqueueSummary(
@@ -76,6 +80,7 @@ object StreamDownloadManager {
         DownloadManager.Request(Uri.parse(stream.url))
           .setTitle("$movieTitle$labelEp (${stream.quality})")
           .setDescription("Decan Movie • ${stream.format}")
+          .setMimeType(if (ext == "mkv") "video/x-matroska" else "video/mp4")
           .setNotificationVisibility(
             DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
           )
@@ -155,69 +160,111 @@ object StreamDownloadManager {
     return BatchEnqueueSummary(queuedFiles = queued, failedFiles = failed)
   }
 
+  fun queryDownloadById(context: Context, downloadId: Long): DownloadTaskInfo? =
+    runCatching {
+      val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+      val cursor = dm.query(DownloadManager.Query().setFilterById(downloadId)) ?: return null
+      cursor.use { c ->
+        if (!c.moveToFirst()) return null
+        parseCursorRow(dm, c)
+      }
+    }.getOrNull()
+
   fun queryAllDownloads(context: Context): List<DownloadTaskInfo> =
     runCatching {
       val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
       val cursor = dm.query(DownloadManager.Query()) ?: return emptyList()
       cursor.use { c ->
-        val idxId = c.getColumnIndex(DownloadManager.COLUMN_ID)
-        val idxTitle = c.getColumnIndex(DownloadManager.COLUMN_TITLE)
-        val idxDesc = c.getColumnIndex(DownloadManager.COLUMN_DESCRIPTION)
-        val idxStatus = c.getColumnIndex(DownloadManager.COLUMN_STATUS)
-        val idxSoFar = c.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
-        val idxTotal = c.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
-        val idxLocalUri = c.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)
-        val idxMime = c.getColumnIndex(DownloadManager.COLUMN_MEDIA_TYPE)
-
         val items = mutableListOf<DownloadTaskInfo>()
         while (c.moveToNext()) {
-          val desc = if (idxDesc >= 0) c.getString(idxDesc).orEmpty() else ""
-          val localUri = if (idxLocalUri >= 0) c.getString(idxLocalUri) else null
-          val isDecan =
-            desc.contains("Decan Movie", ignoreCase = true) ||
-              localUri?.contains("DecanMovie", ignoreCase = true) == true
-          if (!isDecan) continue
-
-          val id = if (idxId >= 0) c.getLong(idxId) else 0L
-          val title = if (idxTitle >= 0) c.getString(idxTitle).orEmpty() else "Download"
-          val status = if (idxStatus >= 0) c.getInt(idxStatus) else DownloadManager.STATUS_PENDING
-          val downloaded = if (idxSoFar >= 0) c.getLong(idxSoFar).coerceAtLeast(0L) else 0L
-          val total = if (idxTotal >= 0) c.getLong(idxTotal) else -1L
-          val mime = if (idxMime >= 0) c.getString(idxMime) else null
-          val progress =
-            when {
-              status == DownloadManager.STATUS_SUCCESSFUL -> 1f
-              total > 0L -> (downloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f)
-              else -> 0f
-            }
-          val statusLabel =
-            when (status) {
-              DownloadManager.STATUS_SUCCESSFUL -> "Completed"
-              DownloadManager.STATUS_RUNNING -> "Downloading"
-              DownloadManager.STATUS_PAUSED -> "Paused"
-              DownloadManager.STATUS_PENDING -> "Queued"
-              DownloadManager.STATUS_FAILED -> "Failed"
-              else -> "Pending"
-            }
-
-          items.add(
-            DownloadTaskInfo(
-              id = id,
-              title = title,
-              description = desc,
-              status = status,
-              statusLabel = statusLabel,
-              bytesDownloaded = downloaded,
-              totalBytes = total,
-              progressFraction = progress,
-              localUri = localUri,
-              mimeType = mime,
-            )
-          )
+          val task = parseCursorRow(dm, c) ?: continue
+          items.add(task)
         }
         items.sortedByDescending { it.id }
       }
     }.getOrDefault(emptyList())
+
+  private fun parseCursorRow(dm: DownloadManager, c: Cursor): DownloadTaskInfo? {
+    val idxId = c.getColumnIndex(DownloadManager.COLUMN_ID)
+    val idxTitle = c.getColumnIndex(DownloadManager.COLUMN_TITLE)
+    val idxDesc = c.getColumnIndex(DownloadManager.COLUMN_DESCRIPTION)
+    val idxStatus = c.getColumnIndex(DownloadManager.COLUMN_STATUS)
+    val idxReason = c.getColumnIndex(DownloadManager.COLUMN_REASON)
+    val idxSoFar = c.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+    val idxTotal = c.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+    val idxLocalUri = c.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)
+    val idxMime = c.getColumnIndex(DownloadManager.COLUMN_MEDIA_TYPE)
+
+    val desc = if (idxDesc >= 0) c.getString(idxDesc).orEmpty() else ""
+    val rawLocalUri = if (idxLocalUri >= 0) c.getString(idxLocalUri) else null
+    val isDecan =
+      desc.contains("Decan Movie", ignoreCase = true) ||
+        rawLocalUri?.contains("DecanMovie", ignoreCase = true) == true
+    if (!isDecan) return null
+
+    val id = if (idxId >= 0) c.getLong(idxId) else 0L
+    val title = if (idxTitle >= 0) c.getString(idxTitle).orEmpty() else "Download"
+    val status = if (idxStatus >= 0) c.getInt(idxStatus) else DownloadManager.STATUS_PENDING
+    val reasonCode = if (idxReason >= 0) c.getInt(idxReason) else 0
+    val downloaded = if (idxSoFar >= 0) c.getLong(idxSoFar).coerceAtLeast(0L) else 0L
+    val total = if (idxTotal >= 0) c.getLong(idxTotal) else -1L
+    val mime = if (idxMime >= 0) c.getString(idxMime) else null
+
+    val resolvedContentUri =
+      if (status == DownloadManager.STATUS_SUCCESSFUL) {
+        runCatching { dm.getUriForDownloadedFile(id)?.toString() }.getOrNull() ?: rawLocalUri
+      } else {
+        rawLocalUri
+      }
+
+    val progress =
+      when {
+        status == DownloadManager.STATUS_SUCCESSFUL -> 1f
+        total > 0L -> (downloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+        else -> 0f
+      }
+    val statusLabel =
+      when (status) {
+        DownloadManager.STATUS_SUCCESSFUL -> "Completed"
+        DownloadManager.STATUS_RUNNING -> "Downloading"
+        DownloadManager.STATUS_PAUSED -> "Paused"
+        DownloadManager.STATUS_PENDING -> "Queued"
+        DownloadManager.STATUS_FAILED -> "Failed"
+        else -> "Pending"
+      }
+    val reasonHint =
+      when (status) {
+        DownloadManager.STATUS_PAUSED ->
+          when (reasonCode) {
+            DownloadManager.PAUSED_QUEUED_FOR_WIFI -> "Waiting for Wi-Fi"
+            DownloadManager.PAUSED_WAITING_FOR_NETWORK -> "Waiting for network"
+            else -> "Paused"
+          }
+        DownloadManager.STATUS_FAILED ->
+          when (reasonCode) {
+            DownloadManager.ERROR_INSUFFICIENT_SPACE -> "Not enough storage space"
+            DownloadManager.ERROR_CANNOT_RESUME -> "Link expired — re-queue from movie details"
+            DownloadManager.ERROR_HTTP_DATA_ERROR, DownloadManager.ERROR_UNHANDLED_HTTP_CODE ->
+              "CDN link returned HTTP error ($reasonCode)"
+            else -> "Download error ($reasonCode)"
+          }
+        else -> null
+      }
+
+    return DownloadTaskInfo(
+      id = id,
+      title = title,
+      description = desc,
+      status = status,
+      statusLabel = statusLabel,
+      reasonHint = reasonHint,
+      bytesDownloaded = downloaded,
+      totalBytes = total,
+      progressFraction = progress,
+      localUri = resolvedContentUri,
+      mimeType = mime,
+    )
+  }
 
   fun removeDownload(context: Context, vararg ids: Long): Int =
     runCatching {

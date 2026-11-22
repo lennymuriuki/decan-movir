@@ -422,12 +422,18 @@ private fun DownloadTaskCard(
                 task.bytesDownloaded / (1024.0 * 1024.0),
               )
             }
+          val statusText =
+            if (!task.reasonHint.isNullOrBlank()) "${task.statusLabel} • ${task.reasonHint}"
+            else "${task.statusLabel} • $sizeSummary"
           Text(
-            text = "${task.statusLabel} • $sizeSummary",
+            text = statusText,
             style = MaterialTheme.typography.bodySmall,
             color =
-              if (task.isCompleted) MaterialTheme.colorScheme.primary
-              else MaterialTheme.colorScheme.onSurfaceVariant,
+              when {
+                task.isCompleted -> MaterialTheme.colorScheme.primary
+                task.isFailed -> MaterialTheme.colorScheme.secondary
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+              },
           )
         }
 

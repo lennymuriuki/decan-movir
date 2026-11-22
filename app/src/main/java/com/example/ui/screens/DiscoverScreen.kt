@@ -26,8 +26,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.LocalMovies
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -44,6 +46,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -53,6 +56,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -61,6 +65,7 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.model.Movie
 import com.example.data.model.SavedMovieEntry
+import com.example.data.settings.ContinueWatchingEntry
 import com.example.ui.components.HeroSpotlightCard
 import com.example.ui.components.MoviePosterCard
 import com.example.ui.components.MoviePosterImage
@@ -73,14 +78,19 @@ fun DiscoverScreen(
   uiState: DiscoverUiState,
   updateState: UpdateUiState,
   savedLibraryMap: Map<String, SavedMovieEntry>,
+  continueWatching: List<ContinueWatchingEntry>,
+  unreadNotifications: Int,
   onRefresh: () -> Unit,
   onSelectMediaFilter: (MediaFilter) -> Unit,
   onSelectGenre: (String) -> Unit,
   onOpenMovie: (Movie) -> Unit,
   onPlayMovie: (Movie) -> Unit,
+  onResumeWatching: (ContinueWatchingEntry) -> Unit,
+  onRemoveContinueWatching: (String) -> Unit,
   onToggleWatchlist: (Movie) -> Unit,
   onLoadMore: () -> Unit,
   onOpenDownloads: () -> Unit,
+  onOpenNotifications: () -> Unit,
   onOpenSettings: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -186,6 +196,26 @@ fun DiscoverScreen(
         }
 
         Row(verticalAlignment = Alignment.CenterVertically) {
+          IconButton(
+            onClick = onOpenNotifications,
+            modifier = Modifier.testTag("discover_notifications_button"),
+          ) {
+            BadgedBox(
+              badge = {
+                if (unreadNotifications > 0) {
+                  Badge(containerColor = MaterialTheme.colorScheme.secondary) {
+                    Text(unreadNotifications.coerceAtMost(9).toString())
+                  }
+                }
+              }
+            ) {
+              Icon(
+                imageVector = Icons.Filled.Notifications,
+                contentDescription = "Notifications",
+                tint = MaterialTheme.colorScheme.onBackground,
+              )
+            }
+          }
           IconButton(
             onClick = onOpenDownloads,
             modifier = Modifier.testTag("discover_downloads_button"),
@@ -484,6 +514,37 @@ fun DiscoverScreen(
       }
 
       else -> {
+        if (continueWatching.isNotEmpty()) {
+          item {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+              Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+                Text(
+                  text = "Continue Watching",
+                  style = MaterialTheme.typography.headlineMedium,
+                  color = MaterialTheme.colorScheme.onBackground,
+                )
+                Text(
+                  text = "Resume right where you left off",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
+              LazyRow(
+                contentPadding = PaddingValues(horizontal = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+              ) {
+                items(continueWatching, key = { "cw_${it.movieId}" }) { cw ->
+                  ContinueWatchingCard(
+                    entry = cw,
+                    onResume = { onResumeWatching(cw) },
+                    onRemove = { onRemoveContinueWatching(cw.movieId) },
+                  )
+                }
+              }
+            }
+          }
+        }
+
         if (uiState.rankings.isNotEmpty()) {
           item {
             DiscoverHorizontalSection(
@@ -705,6 +766,88 @@ private fun RankedChartCard(
               else MaterialTheme.colorScheme.onSurfaceVariant,
           )
         }
+      }
+    }
+  }
+}
+
+@Composable
+private fun ContinueWatchingCard(
+  entry: ContinueWatchingEntry,
+  onResume: () -> Unit,
+  onRemove: () -> Unit,
+) {
+  Card(
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    shape = MaterialTheme.shapes.large,
+    modifier =
+      Modifier.width(196.dp)
+        .clip(MaterialTheme.shapes.large)
+        .clickable(onClick = onResume)
+        .testTag("continue_watching_${entry.movieId}"),
+  ) {
+    Column {
+      Box(modifier = Modifier.fillMaxWidth().aspectRatio(16f / 10f)) {
+        MoviePosterImage(
+          imageUrl = entry.posterUrl,
+          contentDescription = entry.title,
+          modifier = Modifier.fillMaxSize(),
+        )
+        Box(
+          modifier =
+            Modifier.fillMaxSize()
+              .background(Color.Black.copy(alpha = 0.28f)),
+          contentAlignment = Alignment.Center,
+        ) {
+          Surface(
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.92f),
+            shape = CircleShape,
+            modifier = Modifier.size(38.dp),
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Icon(
+                imageVector = Icons.Filled.PlayArrow,
+                contentDescription = "Resume",
+                tint = MaterialTheme.colorScheme.onPrimary,
+              )
+            }
+          }
+        }
+        IconButton(
+          onClick = onRemove,
+          modifier = Modifier.align(Alignment.TopEnd).size(32.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Filled.Close,
+            contentDescription = "Remove from continue watching",
+            tint = Color.White,
+            modifier = Modifier.size(16.dp),
+          )
+        }
+      }
+      LinearProgressIndicator(
+        progress = { entry.progressFraction },
+        modifier = Modifier.fillMaxWidth().height(4.dp),
+        color = MaterialTheme.colorScheme.primary,
+        trackColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+      )
+      Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+          text = entry.title,
+          style = MaterialTheme.typography.titleSmall,
+          color = MaterialTheme.colorScheme.onSurface,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+        val sub =
+          if (entry.season > 0 && entry.episode > 0) "S${entry.season}E${entry.episode} • Tap to resume"
+          else "${(entry.progressFraction * 100).toInt()}% watched"
+        Text(
+          text = sub,
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.primary,
+          maxLines = 1,
+        )
       }
     }
   }

@@ -22,6 +22,10 @@ data class AppSettings(
   val defaultPlaybackSpeed: Float = 1.0f,
   val allowMeteredDownloads: Boolean = true,
   val includeSubtitlesInBatch: Boolean = true,
+  val enableDownloadNotifications: Boolean = true,
+  val enableReleaseNotifications: Boolean = true,
+  val enableTrendingNotifications: Boolean = true,
+  val lastNotifiedReleaseTag: String = "",
   val githubRepo: String = DEFAULT_GITHUB_REPO,
 ) {
   companion object {
@@ -47,6 +51,10 @@ class AppSettingsRepository(context: Context) {
       defaultPlaybackSpeed = prefs.getFloat(KEY_SPEED, 1.0f),
       allowMeteredDownloads = prefs.getBoolean(KEY_METERED_DL, true),
       includeSubtitlesInBatch = prefs.getBoolean(KEY_BATCH_SUBS, true),
+      enableDownloadNotifications = prefs.getBoolean(KEY_NOTIF_DOWNLOADS, true),
+      enableReleaseNotifications = prefs.getBoolean(KEY_NOTIF_RELEASES, true),
+      enableTrendingNotifications = prefs.getBoolean(KEY_NOTIF_TRENDING, true),
+      lastNotifiedReleaseTag = prefs.getString(KEY_LAST_NOTIFIED_TAG, "").orEmpty(),
       githubRepo =
         prefs.getString(KEY_GITHUB_REPO, AppSettings.DEFAULT_GITHUB_REPO)
           ?.takeIf { it.isNotBlank() } ?: AppSettings.DEFAULT_GITHUB_REPO,
@@ -88,6 +96,26 @@ class AppSettingsRepository(context: Context) {
     _settings.update { it.copy(includeSubtitlesInBatch = include) }
   }
 
+  fun setEnableDownloadNotifications(enabled: Boolean) {
+    prefs.edit().putBoolean(KEY_NOTIF_DOWNLOADS, enabled).apply()
+    _settings.update { it.copy(enableDownloadNotifications = enabled) }
+  }
+
+  fun setEnableReleaseNotifications(enabled: Boolean) {
+    prefs.edit().putBoolean(KEY_NOTIF_RELEASES, enabled).apply()
+    _settings.update { it.copy(enableReleaseNotifications = enabled) }
+  }
+
+  fun setEnableTrendingNotifications(enabled: Boolean) {
+    prefs.edit().putBoolean(KEY_NOTIF_TRENDING, enabled).apply()
+    _settings.update { it.copy(enableTrendingNotifications = enabled) }
+  }
+
+  fun markReleaseTagNotified(tagName: String) {
+    prefs.edit().putString(KEY_LAST_NOTIFIED_TAG, tagName).apply()
+    _settings.update { it.copy(lastNotifiedReleaseTag = tagName) }
+  }
+
   fun setGithubRepo(repo: String) {
     val clean = repo.trim().removePrefix("https://github.com/").trim('/')
     val finalRepo = clean.ifBlank { AppSettings.DEFAULT_GITHUB_REPO }
@@ -103,6 +131,10 @@ class AppSettingsRepository(context: Context) {
     const val KEY_SPEED = "default_speed"
     const val KEY_METERED_DL = "allow_metered_dl"
     const val KEY_BATCH_SUBS = "include_batch_subs"
+    const val KEY_NOTIF_DOWNLOADS = "notif_downloads"
+    const val KEY_NOTIF_RELEASES = "notif_releases"
+    const val KEY_NOTIF_TRENDING = "notif_trending"
+    const val KEY_LAST_NOTIFIED_TAG = "last_notified_tag"
     const val KEY_GITHUB_REPO = "github_repo"
   }
 }
