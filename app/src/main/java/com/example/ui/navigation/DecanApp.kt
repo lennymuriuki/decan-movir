@@ -90,8 +90,8 @@ import com.example.ui.components.NotificationCenterSheet
 import com.example.ui.screens.DiscoverScreen
 import com.example.ui.screens.DownloadsScreen
 import com.example.ui.screens.LibraryScreen
+import com.example.ui.screens.MediaPlayerScreen
 import com.example.ui.screens.MovieDetailScreen
-import com.example.ui.screens.PlayerScreen
 import com.example.ui.screens.SearchScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.viewmodel.DiscoverViewModel
@@ -828,7 +828,7 @@ private fun DecanMainShell(
               val decodedLocalTitle =
                 remember(rawLocalTitle) { Uri.decode(rawLocalTitle).takeIf { it.isNotBlank() } }
 
-              PlayerScreen(
+              MediaPlayerScreen(
                 movieId = decodedMovieId,
                 initialSeason = se,
                 initialEpisode = ep,
