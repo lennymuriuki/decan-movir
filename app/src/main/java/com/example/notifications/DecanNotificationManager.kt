@@ -79,10 +79,10 @@ object DecanNotificationManager {
         },
         NotificationChannel(
           CHANNEL_RELEASES,
-          "GitHub App Releases",
+          "App Updates",
           NotificationManager.IMPORTANCE_DEFAULT,
         ).apply {
-          description = "Alerts when a new Decan Movie APK release is published on GitHub."
+          description = "Alerts when a new Decan Movie update is ready."
         },
         NotificationChannel(
           CHANNEL_PICKS,
@@ -177,7 +177,7 @@ object DecanNotificationManager {
   ) {
     ensureInitialized(context)
     val title = "Decan Movie $tagName Available"
-    val msg = "$releaseTitle is live on GitHub Releases. Tap to inspect or download APK."
+    val msg = "$releaseTitle is ready to download. Tap to view update details."
     recordInApp(
       context = context,
       item =

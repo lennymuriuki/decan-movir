@@ -245,8 +245,8 @@ object StreamDownloadManager {
             DownloadManager.ERROR_INSUFFICIENT_SPACE -> "Not enough storage space"
             DownloadManager.ERROR_CANNOT_RESUME -> "Link expired — re-queue from movie details"
             DownloadManager.ERROR_HTTP_DATA_ERROR, DownloadManager.ERROR_UNHANDLED_HTTP_CODE ->
-              "CDN link returned HTTP error ($reasonCode)"
-            else -> "Download error ($reasonCode)"
+              "Stream unavailable — re-queue from movie details"
+            else -> "Download unavailable right now"
           }
         else -> null
       }

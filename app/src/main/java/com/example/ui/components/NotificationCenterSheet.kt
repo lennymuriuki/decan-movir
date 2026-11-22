@@ -79,7 +79,7 @@ fun NotificationCenterSheet(
           Text(
             text =
               if (unreadCount > 0) "$unreadCount unread alert(s)"
-              else "Downloads, GitHub updates & trending picks",
+              else "Downloads, app updates & trending picks",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -139,7 +139,7 @@ fun NotificationCenterSheet(
               color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
-              text = "Download completions, GitHub APK updates, and trending picks will appear here.",
+              text = "Download completions, app updates, and trending picks will appear here.",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

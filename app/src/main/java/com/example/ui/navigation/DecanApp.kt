@@ -234,13 +234,13 @@ private fun CatalogOnlyDecanApp(
     onSelectLibraryFilter = {},
     onToggleQuickWatchlist = {
       scope.launch {
-        snackbarHostState.showSnackbar("Cloud Watchlist requires GOOGLE_SERVICES_JSON in your build")
+        snackbarHostState.showSnackbar("Cloud Watchlist is unavailable right now")
       }
     },
     onToggleFavorite = {},
     onSaveEntryDetails = { _, _, _, _, _ ->
       scope.launch {
-        snackbarHostState.showSnackbar("Cloud Watchlist requires GOOGLE_SERVICES_JSON in your build")
+        snackbarHostState.showSnackbar("Cloud Watchlist is unavailable right now")
       }
     },
     onRemoveLibraryMovie = { _, _ -> },
@@ -423,7 +423,7 @@ private fun DecanMainShell(
     }
   }
 
-  // Trigger a release notification once per newly detected GitHub Release tag
+  // Trigger a release notification once per newly detected app update tag
   LaunchedEffect(updateState.latestRelease, appSettings.enableReleaseNotifications) {
     val latest = updateState.latestRelease
     if (
@@ -647,13 +647,13 @@ private fun DecanMainShell(
                       verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                       Text(
-                        text = "Cloud Library Not Configured",
+                        text = "Cloud Sync Unavailable",
                         style = MaterialTheme.typography.headlineSmall,
                         color = MaterialTheme.colorScheme.onSurface,
                       )
                       Text(
                         text =
-                          "This APK was compiled without app/google-services.json. Streaming, Theater Player, search, and batch downloads work normally. To enable Google Sign-In and Firestore watchlist sync, add GOOGLE_SERVICES_JSON to your GitHub Secrets and rebuild.",
+                          "Cloud Watchlist & Google Sign-In are unavailable in this build. Streaming, Theater Player, search, and offline downloads work normally.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                       )
@@ -731,7 +731,6 @@ private fun DecanMainShell(
                     onNotify("Sent test cinema alert")
                   }
                 },
-                onSaveGithubRepo = settingsRepository::setGithubRepo,
                 onCheckUpdates = { updateViewModel.checkForUpdates(appSettings.githubRepo) },
                 onNotify = onNotify,
                 modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
@@ -825,6 +824,7 @@ private fun DecanMainShell(
                 localPlayUri = decodedLocalUri,
                 localTitle = decodedLocalTitle,
                 savedEntry = savedLibraryMap[decodedMovieId],
+                savedLibraryMap = savedLibraryMap,
                 catalogRepository = catalogRepository,
                 appSettings = appSettings,
                 progressStore = progressStore,

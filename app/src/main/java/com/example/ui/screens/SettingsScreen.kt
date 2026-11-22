@@ -44,7 +44,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -90,13 +89,11 @@ fun SettingsScreen(
   onSetEnableReleaseNotifications: (Boolean) -> Unit,
   onSetEnableTrendingNotifications: (Boolean) -> Unit,
   onSendTestNotification: () -> Unit,
-  onSaveGithubRepo: (String) -> Unit,
   onCheckUpdates: () -> Unit,
   onNotify: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
-  var repoInput by remember(appSettings.githubRepo) { mutableStateOf(appSettings.githubRepo) }
   var hasNotifPerm by remember {
     mutableStateOf(DecanNotificationManager.hasPostPermission(context))
   }
@@ -184,7 +181,7 @@ fun SettingsScreen(
                   if (isFirebaseConfigured)
                     (userEmail?.ifBlank { "Firestore Watchlist Sync Active" }
                       ?: "Firestore Watchlist Sync Active")
-                  else "Add GOOGLE_SERVICES_JSON in GitHub Secrets to enable Google Sign-In & Cloud Sync.",
+                  else "Cloud Sync is unavailable in this build. Streaming & downloads remain active.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
@@ -254,8 +251,8 @@ fun SettingsScreen(
             onCheckedChange = onSetEnableDownloadNotifications,
           )
           SettingToggleRow(
-            title = "GitHub Release Update Alerts",
-            subtitle = "Notify whenever a newer Decan Movie APK release is published",
+            title = "App Update Alerts",
+            subtitle = "Notify whenever a newer version of Decan Movie is available",
             checked = appSettings.enableReleaseNotifications,
             onCheckedChange = onSetEnableReleaseNotifications,
           )
@@ -287,7 +284,7 @@ fun SettingsScreen(
       }
     }
 
-    // GitHub Releases & Updater Card
+    // App Updates Card
     item {
       Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
@@ -308,63 +305,34 @@ fun SettingsScreen(
               tint = MaterialTheme.colorScheme.primary,
             )
             Text(
-              text = "GitHub Updates & Releases",
+              text = "App Updates",
               style = MaterialTheme.typography.titleMedium,
               color = MaterialTheme.colorScheme.onSurface,
             )
           }
 
-          OutlinedTextField(
-            value = repoInput,
-            onValueChange = { repoInput = it },
-            label = { Text("GitHub Repository (owner/repo)") },
-            placeholder = { Text("lennymuriuki4/decan-movir") },
-            singleLine = true,
+          Button(
+            onClick = onCheckUpdates,
+            enabled = !updateState.isChecking,
             shape = MaterialTheme.shapes.medium,
-            modifier = Modifier.fillMaxWidth().testTag("github_repo_input"),
-          )
-
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxWidth().testTag("check_updates_button"),
           ) {
-            OutlinedButton(
-              onClick = {
-                onSaveGithubRepo(repoInput)
-                onNotify("Saved GitHub repository")
-              },
-              shape = MaterialTheme.shapes.medium,
-              modifier = Modifier.weight(1f),
-            ) {
-              Text("Save Repo")
-            }
-
-            Button(
-              onClick = {
-                onSaveGithubRepo(repoInput)
-                onCheckUpdates()
-              },
-              enabled = !updateState.isChecking,
-              shape = MaterialTheme.shapes.medium,
-              modifier = Modifier.weight(1.4f).testTag("check_github_updates_button"),
-            ) {
-              if (updateState.isChecking) {
-                CircularProgressIndicator(
-                  color = MaterialTheme.colorScheme.onPrimary,
-                  modifier = Modifier.size(16.dp),
-                  strokeWidth = 2.dp,
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Checking…")
-              } else {
-                Icon(
-                  imageVector = Icons.Filled.Refresh,
-                  contentDescription = null,
-                  modifier = Modifier.size(16.dp),
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Check Updates")
-              }
+            if (updateState.isChecking) {
+              CircularProgressIndicator(
+                color = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.size(16.dp),
+                strokeWidth = 2.dp,
+              )
+              Spacer(modifier = Modifier.width(8.dp))
+              Text("Checking for Updates…")
+            } else {
+              Icon(
+                imageVector = Icons.Filled.Refresh,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+              )
+              Spacer(modifier = Modifier.width(8.dp))
+              Text("Check for Updates")
             }
           }
 
@@ -414,7 +382,7 @@ fun SettingsScreen(
                   val assetNames =
                     latest.assets.joinToString(", ") { "${it.name} (${it.sizeMb} MB)" }
                   Text(
-                    text = "Release Assets: $assetNames",
+                    text = "Package: $assetNames",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
                   )
@@ -428,7 +396,7 @@ fun SettingsScreen(
                     }
                   },
                   shape = MaterialTheme.shapes.medium,
-                  modifier = Modifier.fillMaxWidth().testTag("open_github_release_button"),
+                  modifier = Modifier.fillMaxWidth().testTag("download_latest_update_button"),
                 ) {
                   Icon(
                     imageVector = Icons.AutoMirrored.Filled.OpenInNew,
@@ -437,40 +405,44 @@ fun SettingsScreen(
                   )
                   Spacer(modifier = Modifier.width(6.dp))
                   Text(
-                    if (preferredApkUrl != null) "Download Release APK on GitHub"
-                    else "View Release on GitHub"
+                    if (preferredApkUrl != null) "Download Latest Update"
+                    else "View Update Details"
                   )
                 }
               }
             }
           } else if (updateState.checkedOnce && updateState.errorMessage == null) {
             Text(
-              text = "No published GitHub releases found yet for ${appSettings.githubRepo}. Trigger 'Release Decan Movie' in GitHub Actions or push a v* tag to publish your first APK release.",
+              text = "No new updates available right now.",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
           } else if (updateState.errorMessage != null) {
             Text(
-              text = "GitHub check: ${updateState.errorMessage}",
+              text = "Updates unavailable right now.",
               style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.secondary,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
           }
 
           if (updateState.recentReleases.isNotEmpty()) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Text(
-              text = "Recent Release History",
+              text = "Version History",
               style = MaterialTheme.typography.labelLarge,
               color = MaterialTheme.colorScheme.onSurface,
             )
             updateState.recentReleases.take(4).forEach { rel ->
+              val relApkUrl =
+                rel.assets.firstOrNull { it.name.endsWith(".apk", ignoreCase = true) }?.downloadUrl
               Row(
                 modifier =
                   Modifier.fillMaxWidth()
                     .clickable {
                       runCatching {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(rel.htmlUrl)))
+                        context.startActivity(
+                          Intent(Intent.ACTION_VIEW, Uri.parse(relApkUrl ?: rel.htmlUrl))
+                        )
                       }
                     }
                     .padding(vertical = 4.dp),
@@ -487,33 +459,12 @@ fun SettingsScreen(
                 )
                 Icon(
                   imageVector = Icons.AutoMirrored.Filled.OpenInNew,
-                  contentDescription = "Open release",
+                  contentDescription = "Open version",
                   tint = MaterialTheme.colorScheme.primary,
                   modifier = Modifier.size(14.dp),
                 )
               }
             }
-          }
-
-          OutlinedButton(
-            onClick = {
-              val slug = appSettings.githubRepo
-              runCatching {
-                context.startActivity(
-                  Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/$slug/releases"))
-                )
-              }
-            },
-            shape = MaterialTheme.shapes.medium,
-            modifier = Modifier.fillMaxWidth(),
-          ) {
-            Icon(
-              imageVector = Icons.AutoMirrored.Filled.OpenInNew,
-              contentDescription = null,
-              modifier = Modifier.size(16.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("Open Releases Page on GitHub")
           }
         }
       }

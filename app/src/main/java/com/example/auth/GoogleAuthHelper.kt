@@ -174,13 +174,13 @@ fun onGoogleSignInClicked(
   onAuthCancelled: () -> Unit = {},
 ) {
   if (FirebaseApp.getApps(context).isEmpty()) {
-    onAuthError("Firebase is not configured in this build (google-services.json missing).")
+    onAuthError("Cloud Sign-In is currently unavailable in this build.")
     return
   }
   val clientId =
     resolveDefaultWebClientId(context)
       ?: run {
-        onAuthError("Google Sign-In configuration missing: default_web_client_id not found")
+        onAuthError("Google Sign-In configuration is unavailable in this build.")
         return
       }
   val activityContext = context as? Activity

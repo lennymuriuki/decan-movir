@@ -48,15 +48,19 @@ class DiscoverViewModel(
   private var currentPage = 1
 
   init {
-    refreshCatalog()
+    loadCatalog(forceRefresh = false)
   }
 
   fun refreshCatalog() {
+    loadCatalog(forceRefresh = true)
+  }
+
+  private fun loadCatalog(forceRefresh: Boolean) {
     viewModelScope.launch {
       currentPage = 1
       _uiState.update { it.copy(isLoading = true, errorMessage = null) }
       try {
-        val feed = catalogRepository.loadHomeCatalog()
+        val feed = catalogRepository.loadHomeCatalog(forceRefresh = forceRefresh)
         val dynamicGenres =
           feed.allMovies
             .map { it.genre }

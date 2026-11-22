@@ -141,6 +141,7 @@ fun PlayerScreen(
   localPlayUri: String? = null,
   localTitle: String? = null,
   savedEntry: SavedMovieEntry?,
+  savedLibraryMap: Map<String, SavedMovieEntry> = emptyMap(),
   catalogRepository: MovieCatalogRepository,
   appSettings: AppSettings,
   progressStore: PlaybackProgressStore? = null,
@@ -286,7 +287,7 @@ fun PlayerScreen(
     if (preferred == null) {
       val trailer = movie?.previewUrl
       if (trailer.isNullOrBlank()) {
-        playerError = "No direct MP4 stream returned for this episode/title."
+        playerError = "Stream unavailable right now."
       }
     }
   }
@@ -298,19 +299,11 @@ fun PlayerScreen(
       return@LaunchedEffect
     }
     isLoadingMedia = true
-    val enriched = catalogRepository.getMovieDetail(activeMovieId)
-    if (enriched != null) movie = enriched
-
-    val sid =
-      enriched?.subjectId?.takeIf { it.isNotBlank() }
-        ?: activeMovieId.takeIf { it.startsWith("mbox_") }?.removePrefix("mbox_")
-        ?: ""
-
-    val recDeferred = scope.async {
-      catalogRepository.getRecommendations(sid, enriched?.genre)
-    }
-
-    if (sid.isNotBlank()) {
+    if (activeMovieId.startsWith("mbox_")) {
+      val sid = activeMovieId.removePrefix("mbox_")
+      val recDeferred = scope.async {
+        catalogRepository.getRecommendations(sid, movie?.genre)
+      }
       val rich = catalogRepository.getMovieBoxRichDetail(sid)
       if (rich != null) {
         movie = rich.movie
@@ -328,12 +321,23 @@ fun PlayerScreen(
         selectedEpisode = ep
         resolveEpisodeOrMovieStreams(sid, se, ep, rich.detailPath)
       } else {
-        resolveEpisodeOrMovieStreams(sid, selectedSeason, selectedEpisode, enriched?.detailPath)
+        resolveEpisodeOrMovieStreams(sid, selectedSeason, selectedEpisode, movie?.detailPath)
       }
+      recommendations = recDeferred.await().filter { it.id != activeMovieId }
     } else {
-      isLoadingMedia = false
+      val enriched = catalogRepository.getMovieDetail(activeMovieId)
+      if (enriched != null) movie = enriched
+      val sid = enriched?.subjectId.orEmpty()
+      val recDeferred = scope.async {
+        catalogRepository.getRecommendations(sid, enriched?.genre ?: movie?.genre)
+      }
+      if (sid.isNotBlank()) {
+        resolveEpisodeOrMovieStreams(sid, selectedSeason, selectedEpisode, enriched?.detailPath)
+      } else {
+        isLoadingMedia = false
+      }
+      recommendations = recDeferred.await().filter { it.id != activeMovieId }
     }
-    recommendations = recDeferred.await()
   }
 
   val playbackUrl =
@@ -457,18 +461,18 @@ fun PlayerScreen(
         }
         false
       }
-      mp.setOnErrorListener { _, what, extra ->
+      mp.setOnErrorListener { _, _, _ ->
         isBuffering = false
         isPlaying = false
-        playerError = "Playback failed (code $what/$extra). Try switching quality or external player."
+        playerError = "Playback unavailable on this stream. Try switching quality."
         controlsVisible = true
         true
       }
       mp.prepareAsync()
-    } catch (e: Exception) {
+    } catch (_: Exception) {
       isBuffering = false
       isPlaying = false
-      playerError = e.localizedMessage ?: "Unable to initialize stream"
+      playerError = "Stream unavailable right now."
     }
   }
 
@@ -590,6 +594,20 @@ fun PlayerScreen(
         modifier = Modifier.fillMaxSize().clip(MaterialTheme.shapes.extraSmall),
         contentAlignment = Alignment.Center,
       ) {
+        val backdropArt = movie?.backdropUrl?.ifBlank { movie?.posterUrl }.orEmpty()
+        if (
+          localPlayUri.isNullOrBlank() &&
+            backdropArt.isNotBlank() &&
+            (isLoadingMedia || isBuffering || playbackUrl == null || playerError != null)
+        ) {
+          MoviePosterImage(
+            imageUrl = backdropArt,
+            contentDescription = displayTitle,
+            modifier = Modifier.fillMaxSize(),
+          )
+          Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.58f)))
+        }
+
         if (playbackUrl != null && playerError == null) {
           AndroidView(
             factory = { ctx ->
@@ -641,10 +659,28 @@ fun PlayerScreen(
 
       // Loading / Error States
       if (isLoadingMedia || isBuffering) {
-        CircularProgressIndicator(
-          color = MaterialTheme.colorScheme.primary,
-          modifier = Modifier.size(44.dp),
-        )
+        Column(
+          horizontalAlignment = Alignment.CenterHorizontally,
+          verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          CircularProgressIndicator(
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(44.dp),
+          )
+          if (isLoadingMedia) {
+            Surface(
+              color = Color.Black.copy(alpha = 0.65f),
+              shape = MaterialTheme.shapes.small,
+            ) {
+              Text(
+                text = "Loading stream…",
+                style = MaterialTheme.typography.labelMedium,
+                color = Color.White,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+              )
+            }
+          }
+        }
       }
 
       if (playerError != null) {
@@ -655,11 +691,33 @@ fun PlayerScreen(
         ) {
           Text(
             text = playerError.orEmpty(),
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
             color = Color.White,
             textAlign = TextAlign.Center,
           )
           Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            val sid = movie?.subjectId.orEmpty()
+            if (sid.isNotBlank()) {
+              FilledTonalButton(
+                onClick = {
+                  scope.launch {
+                    resolveEpisodeOrMovieStreams(
+                      sid = sid,
+                      se = selectedSeason,
+                      ep = selectedEpisode,
+                      detailPath = movie?.detailPath,
+                    )
+                  }
+                }
+              ) {
+                Text("Retry")
+              }
+            }
+            if (streams.isNotEmpty()) {
+              FilledTonalButton(onClick = { showSettingsSheet = true }) {
+                Text("Switch Quality")
+              }
+            }
             if (playbackUrl != null) {
               OutlinedButton(
                 onClick = {
@@ -670,9 +728,6 @@ fun PlayerScreen(
               ) {
                 Text("Open External")
               }
-            }
-            FilledTonalButton(onClick = { showSettingsSheet = true }) {
-              Text("Switch Quality")
             }
           }
         }
@@ -1317,60 +1372,48 @@ fun PlayerScreen(
           }
         }
 
-        // Up Next & Recommendations
+        // Up Next & Recommendations (Poster Cards with Description Below)
         if (recommendations.isNotEmpty()) {
           item {
-            Text(
-              text = "Recommended Next",
-              style = MaterialTheme.typography.titleLarge,
-              color = MaterialTheme.colorScheme.onBackground,
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+              Text(
+                text = "Recommended Next",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+              )
+              Text(
+                text = "Poster picks with synopsis — tap any card to play",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
           }
-          items(recommendations, key = { "rec_${it.id}" }) { rec ->
-            Card(
-              colors =
-                CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-              shape = MaterialTheme.shapes.medium,
-              modifier =
-                Modifier.fillMaxWidth().clickable {
-                  pendingSeekMs = 0L
-                  currentPositionMs = 0L
-                  selectedSeason = 0
-                  selectedEpisode = 0
-                  activeMovieId = rec.id
-                },
+
+          items(
+            recommendations.chunked(2),
+            key = { row -> "rec_row_${row.joinToString("_") { it.id }}" },
+          ) { rowItems ->
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-              Row(
-                modifier = Modifier.padding(10.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                MoviePosterImage(
-                  imageUrl = rec.posterUrl,
-                  contentDescription = rec.title,
-                  modifier =
-                    Modifier.width(72.dp).aspectRatio(16f / 10f).clip(MaterialTheme.shapes.small),
+              for (rec in rowItems) {
+                PlayerRecommendationPosterCard(
+                  movie = rec,
+                  isSaved = savedLibraryMap.containsKey(rec.id),
+                  onPlay = {
+                    pendingSeekMs = 0L
+                    currentPositionMs = 0L
+                    selectedSeason = 0
+                    selectedEpisode = 0
+                    activeMovieId = rec.id
+                  },
+                  onToggleWatchlist = { onToggleWatchlist(rec) },
+                  modifier = Modifier.weight(1f),
                 )
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                  Text(
-                    text = rec.title,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                  )
-                  Text(
-                    text = listOfNotNull(rec.mediaType, rec.genre, rec.releaseYear).joinToString(" • "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                  )
-                }
-                Icon(
-                  imageVector = Icons.Filled.PlayArrow,
-                  contentDescription = "Play recommendation",
-                  tint = MaterialTheme.colorScheme.primary,
-                )
+              }
+              if (rowItems.size == 1) {
+                Spacer(modifier = Modifier.weight(1f))
               }
             }
           }
@@ -1573,7 +1616,7 @@ fun PlayerScreen(
 
         if (subtitles.isEmpty()) {
           Text(
-            text = "No .srt subtitle tracks were returned for this stream.",
+            text = "Subtitles unavailable for this stream.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -1597,6 +1640,156 @@ fun PlayerScreen(
       onDismiss = { showBatchDownloadSheet = false },
       onNotify = onNotify,
     )
+  }
+}
+
+@Composable
+private fun PlayerRecommendationPosterCard(
+  movie: Movie,
+  isSaved: Boolean,
+  onPlay: () -> Unit,
+  onToggleWatchlist: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Card(
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    shape = MaterialTheme.shapes.large,
+    modifier =
+      modifier
+        .clip(MaterialTheme.shapes.large)
+        .clickable(onClick = onPlay)
+        .testTag("player_rec_card_${movie.id}"),
+  ) {
+    Column {
+      Box(
+        modifier =
+          Modifier.fillMaxWidth()
+            .aspectRatio(2f / 3f)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+      ) {
+        MoviePosterImage(
+          imageUrl = movie.posterUrl,
+          contentDescription = movie.title,
+          modifier = Modifier.fillMaxSize(),
+        )
+
+        Box(
+          modifier =
+            Modifier.fillMaxWidth()
+              .height(74.dp)
+              .align(Alignment.BottomCenter)
+              .background(
+                Brush.verticalGradient(
+                  colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))
+                )
+              )
+        )
+
+        if (!movie.imdbRating.isNullOrBlank()) {
+          Surface(
+            color = Color.Black.copy(alpha = 0.78f),
+            shape = MaterialTheme.shapes.extraSmall,
+            modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+          ) {
+            Text(
+              text = "★ ${movie.imdbRating}",
+              style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+              color = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+            )
+          }
+        } else {
+          Surface(
+            color = Color.Black.copy(alpha = 0.72f),
+            shape = MaterialTheme.shapes.extraSmall,
+            modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+          ) {
+            Text(
+              text = movie.mediaType.uppercase(),
+              style = MaterialTheme.typography.labelSmall,
+              color = Color.White,
+              modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+            )
+          }
+        }
+
+        FilledTonalIconButton(
+          onClick = onToggleWatchlist,
+          colors =
+            IconButtonDefaults.filledTonalIconButtonColors(
+              containerColor =
+                if (isSaved) MaterialTheme.colorScheme.primary else Color.Black.copy(alpha = 0.58f),
+              contentColor =
+                if (isSaved) MaterialTheme.colorScheme.onPrimary else Color.White,
+            ),
+          modifier =
+            Modifier.align(Alignment.TopEnd)
+              .padding(6.dp)
+              .size(34.dp),
+        ) {
+          Icon(
+            imageVector = if (isSaved) Icons.Filled.Bookmark else Icons.Filled.BookmarkAdd,
+            contentDescription = if (isSaved) "Saved" else "Add to watchlist",
+            modifier = Modifier.size(16.dp),
+          )
+        }
+
+        Surface(
+          color = MaterialTheme.colorScheme.primary,
+          shape = CircleShape,
+          modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp).size(34.dp),
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(
+              imageVector = Icons.Filled.PlayArrow,
+              contentDescription = "Play ${movie.title}",
+              tint = MaterialTheme.colorScheme.onPrimary,
+              modifier = Modifier.size(20.dp),
+            )
+          }
+        }
+
+        Surface(
+          color = Color.Black.copy(alpha = 0.7f),
+          shape = MaterialTheme.shapes.extraSmall,
+          modifier = Modifier.align(Alignment.BottomStart).padding(8.dp),
+        ) {
+          Text(
+            text = movie.releaseYear,
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.White,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+          )
+        }
+      }
+
+      Column(
+        modifier = Modifier.padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+      ) {
+        Text(
+          text = movie.title,
+          style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+          color = MaterialTheme.colorScheme.onSurface,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+          text = listOfNotNull(movie.genre, movie.mediaType).joinToString(" • "),
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.primary,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+          text = movie.synopsis.ifBlank { "Tap to stream in HD on Decan Theater." },
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 3,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+    }
   }
 }
 

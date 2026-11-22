@@ -11,10 +11,12 @@ import com.example.data.remote.moviebox.MovieBoxSuggestion
 import com.example.data.remote.moviebox.SubtitleCue
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
@@ -34,10 +36,23 @@ class MovieCatalogRepository(
   private val api: ItunesMovieApi = createDefaultApi(),
   private val movieBox: MovieBoxEngine = MovieBoxEngine(),
 ) {
-  private val cache = LinkedHashMap<String, Movie>()
+  private val cache = ConcurrentHashMap<String, Movie>()
+  @Volatile private var cachedHomeFeed: Pair<Long, CatalogFeedResult>? = null
+  private val richDetailCache = ConcurrentHashMap<String, Pair<Long, MovieBoxRichDetail>>()
+  private val streamCache = ConcurrentHashMap<String, Pair<Long, List<MovieBoxStream>>>()
+  private val subtitleCache = ConcurrentHashMap<String, Pair<Long, List<MovieBoxSubtitle>>>()
+  private val recCache = ConcurrentHashMap<String, Pair<Long, List<Movie>>>()
 
-  suspend fun loadHomeCatalog(): CatalogFeedResult = coroutineScope {
+  suspend fun loadHomeCatalog(forceRefresh: Boolean = false): CatalogFeedResult = coroutineScope {
+    val cached = cachedHomeFeed
+    if (!forceRefresh && cached != null && !cached.second.isOfflineFallback &&
+        (System.currentTimeMillis() - cached.first) < HOME_CACHE_TTL_MS
+    ) {
+      return@coroutineScope cached.second
+    }
+
     try {
+      val tokenWarmDef = async { runCatching { movieBox.bootstrapToken() }.getOrNull() }
       val mboxHomeDeferred = async { runCatching { movieBox.getHome() }.getOrNull() }
       val mboxRankingsDeferred = async {
         runCatching { movieBox.getRankings(page = 1, perPage = 15) }.getOrDefault(emptyList())
@@ -65,6 +80,7 @@ class MovieCatalogRepository(
           .getOrDefault(emptyList())
       }
 
+      tokenWarmDef.await()
       val mboxHome = mboxHomeDeferred.await()
       val mboxRankings = mboxRankingsDeferred.await()
       val mboxMovies = mboxMoviesDeferred.await()
@@ -188,19 +204,22 @@ class MovieCatalogRepository(
         }
       }
 
-      CatalogFeedResult(
-        spotlight = spotlight,
-        rankings = effectiveRankings,
-        anime = effectiveAnime,
-        recommendations = recommendations,
-        rails = rails,
-        allMovies = combined,
-        trendingKeywords =
-          trendingKeywords.ifEmpty {
-            listOf("Avatar", "Breaking Bad", "Attack on Titan", "Dune", "Action")
-          },
-        isOfflineFallback = false,
-      )
+      val result =
+        CatalogFeedResult(
+          spotlight = spotlight,
+          rankings = effectiveRankings,
+          anime = effectiveAnime,
+          recommendations = recommendations,
+          rails = rails,
+          allMovies = combined,
+          trendingKeywords =
+            trendingKeywords.ifEmpty {
+              listOf("Avatar", "Breaking Bad", "Attack on Titan", "Dune", "Action")
+            },
+          isOfflineFallback = false,
+        )
+      cachedHomeFeed = System.currentTimeMillis() to result
+      result
     } catch (e: CancellationException) {
       throw e
     } catch (_: Exception) {
@@ -241,6 +260,12 @@ class MovieCatalogRepository(
   }
 
   suspend fun getRecommendations(subjectId: String, genreHint: String? = null): List<Movie> {
+    if (subjectId.isNotBlank()) {
+      val hit = recCache[subjectId]
+      if (hit != null && (System.currentTimeMillis() - hit.first) < DETAIL_CACHE_TTL_MS) {
+        return hit.second
+      }
+    }
     val remote =
       if (subjectId.isNotBlank()) {
         runCatching { movieBox.getRecommendations(subjectId) }.getOrDefault(emptyList())
@@ -248,7 +273,12 @@ class MovieCatalogRepository(
         emptyList()
       }
     remote.forEach { cache[it.id] = it }
-    if (remote.isNotEmpty()) return remote
+    if (remote.isNotEmpty()) {
+      if (subjectId.isNotBlank()) {
+        recCache[subjectId] = System.currentTimeMillis() to remote
+      }
+      return remote
+    }
     val pool = (cache.values.toList() + OfflineCatalogFallback.movies).distinctBy { it.id }
     val matching =
       if (!genreHint.isNullOrBlank()) {
@@ -304,9 +334,8 @@ class MovieCatalogRepository(
     val cached = cache[movieId]
     if (movieId.startsWith("mbox_")) {
       val subjectId = movieId.removePrefix("mbox_")
-      val rich = runCatching { movieBox.getDetails(subjectId) }.getOrNull()
+      val rich = getMovieBoxRichDetail(subjectId)
       if (rich != null) {
-        cache[rich.movie.id] = rich.movie
         return rich.movie
       }
       return cached
@@ -332,37 +361,68 @@ class MovieCatalogRepository(
     return cached ?: OfflineCatalogFallback.movies.firstOrNull { it.id == movieId }
   }
 
-  suspend fun getMovieBoxRichDetail(subjectId: String): MovieBoxRichDetail? =
-    runCatching {
-      movieBox.getDetails(subjectId).also { cache[it.movie.id] = it.movie }
+  suspend fun getMovieBoxRichDetail(subjectId: String): MovieBoxRichDetail? {
+    val hit = richDetailCache[subjectId]
+    if (hit != null && (System.currentTimeMillis() - hit.first) < DETAIL_CACHE_TTL_MS) {
+      return hit.second
+    }
+    return runCatching {
+      movieBox.getDetails(subjectId).also { detail ->
+        cache[detail.movie.id] = detail.movie
+        richDetailCache[subjectId] = System.currentTimeMillis() to detail
+      }
     }.getOrNull()
+  }
 
-  suspend fun getSeriesSeasons(subjectId: String): List<MovieBoxSeason> =
-    runCatching { movieBox.getEpisodes(subjectId) }.getOrDefault(emptyList())
+  suspend fun getSeriesSeasons(subjectId: String): List<MovieBoxSeason> {
+    richDetailCache[subjectId]?.let { if (it.second.seasons.isNotEmpty()) return it.second.seasons }
+    return runCatching { movieBox.getEpisodes(subjectId) }.getOrDefault(emptyList())
+  }
 
   suspend fun getStreams(
     subjectId: String,
     season: Int = 0,
     episode: Int = 0,
     detailPath: String? = null,
-  ): List<MovieBoxStream> =
-    runCatching {
+    forceRefresh: Boolean = false,
+  ): List<MovieBoxStream> {
+    val key = "${subjectId}_${season}_${episode}"
+    val hit = streamCache[key]
+    if (!forceRefresh && hit != null && (System.currentTimeMillis() - hit.first) < STREAM_CACHE_TTL_MS) {
+      return hit.second
+    }
+    return runCatching {
       movieBox.getStreams(
         subjectId = subjectId,
         season = season,
         episode = episode,
         detailPath = detailPath,
-      )
+      ).also { resolved ->
+        if (resolved.isNotEmpty()) {
+          streamCache[key] = System.currentTimeMillis() to resolved
+        }
+      }
     }.getOrDefault(emptyList())
+  }
 
   suspend fun getSubtitles(
     subjectId: String,
     season: Int = 0,
     episode: Int = 0,
-  ): List<MovieBoxSubtitle> =
-    runCatching {
-      movieBox.getSubtitles(subjectId = subjectId, season = season, episode = episode)
+  ): List<MovieBoxSubtitle> {
+    val key = "${subjectId}_${season}_${episode}"
+    val hit = subtitleCache[key]
+    if (hit != null && (System.currentTimeMillis() - hit.first) < DETAIL_CACHE_TTL_MS) {
+      return hit.second
+    }
+    return runCatching {
+      movieBox.getSubtitles(subjectId = subjectId, season = season, episode = episode).also { subs ->
+        if (subs.isNotEmpty()) {
+          subtitleCache[key] = System.currentTimeMillis() to subs
+        }
+      }
     }.getOrDefault(emptyList())
+  }
 
   suspend fun fetchSubtitleCues(subtitleUrl: String): List<SubtitleCue> =
     runCatching { movieBox.fetchSubtitleCues(subtitleUrl) }.getOrDefault(emptyList())
@@ -412,12 +472,16 @@ class MovieCatalogRepository(
 
   companion object {
     private const val BASE_URL = "https://itunes.apple.com/"
+    private const val HOME_CACHE_TTL_MS = 5 * 60_000L
+    private const val DETAIL_CACHE_TTL_MS = 5 * 60_000L
+    private const val STREAM_CACHE_TTL_MS = 3 * 60_000L
 
     fun createDefaultApi(): ItunesMovieApi {
       val okHttp =
         OkHttpClient.Builder()
-          .connectTimeout(12, TimeUnit.SECONDS)
-          .readTimeout(15, TimeUnit.SECONDS)
+          .connectTimeout(5, TimeUnit.SECONDS)
+          .readTimeout(8, TimeUnit.SECONDS)
+          .connectionPool(ConnectionPool(4, 3, TimeUnit.MINUTES))
           .build()
       val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
       return Retrofit.Builder()
@@ -451,7 +515,7 @@ private object OfflineCatalogFallback {
         subjectId = "8906247916759695608",
         mediaType = "Movie",
         imdbRating = "7.9",
-        sourceProvider = "MovieBox",
+        sourceProvider = "Decan",
       ),
       Movie(
         id = "mbox_6207982430134357800",
@@ -471,7 +535,7 @@ private object OfflineCatalogFallback {
         subjectId = "6207982430134357800",
         mediaType = "Series",
         imdbRating = "9.5",
-        sourceProvider = "MovieBox",
+        sourceProvider = "Decan",
       ),
       Movie(
         id = "itunes_1733555739",

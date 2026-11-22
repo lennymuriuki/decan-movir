@@ -42,7 +42,7 @@ class GitHubUpdateRepository(
     withContext(Dispatchers.IO) {
       runCatching {
         val cleanSlug = repoSlug.trim().removePrefix("https://github.com/").trim('/')
-        require(cleanSlug.contains("/")) { "Enter repository as owner/repo" }
+        require(cleanSlug.contains("/")) { "Updates unavailable right now" }
 
         val latestReq =
           Request.Builder()
@@ -56,7 +56,7 @@ class GitHubUpdateRepository(
             return@runCatching fetchFallbackRelease(cleanSlug, currentVersion)
           }
           if (!resp.isSuccessful) {
-            throw IllegalStateException("GitHub API returned HTTP ${resp.code}")
+            throw IllegalStateException("Updates unavailable right now")
           }
           val obj = JSONObject(resp.body?.string().orEmpty())
           parseRelease(obj, currentVersion)
@@ -71,7 +71,7 @@ class GitHubUpdateRepository(
     withContext(Dispatchers.IO) {
       runCatching {
         val cleanSlug = repoSlug.trim().removePrefix("https://github.com/").trim('/')
-        require(cleanSlug.contains("/")) { "Enter repository as owner/repo" }
+        require(cleanSlug.contains("/")) { "Updates unavailable right now" }
         val req =
           Request.Builder()
             .url("https://api.github.com/repos/$cleanSlug/releases?per_page=6")
@@ -82,7 +82,7 @@ class GitHubUpdateRepository(
         client.newCall(req).execute().use { resp ->
           if (resp.code == 404) return@runCatching emptyList()
           if (!resp.isSuccessful) {
-            throw IllegalStateException("GitHub API returned HTTP ${resp.code}")
+            throw IllegalStateException("Updates unavailable right now")
           }
           val arr = JSONArray(resp.body?.string().orEmpty())
           buildList {

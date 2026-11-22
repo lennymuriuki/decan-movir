@@ -145,17 +145,10 @@ fun MovieDetailScreen(
   }
 
   LaunchedEffect(movieId) {
-    val enriched = catalogRepository.getMovieDetail(movieId)
-    if (enriched != null) {
-      movie = enriched
-    }
-    val sid =
-      enriched?.subjectId?.takeIf { it.isNotBlank() }
-        ?: movieId.takeIf { it.startsWith("mbox_") }?.removePrefix("mbox_")
-        ?: ""
-    val recDeferred =
-      scope.async { catalogRepository.getRecommendations(sid, enriched?.genre ?: movie?.genre) }
-    if (sid.isNotBlank()) {
+    if (movieId.startsWith("mbox_")) {
+      val sid = movieId.removePrefix("mbox_")
+      val recDeferred =
+        scope.async { catalogRepository.getRecommendations(sid, movie?.genre) }
       val rich = catalogRepository.getMovieBoxRichDetail(sid)
       if (rich != null) {
         movie = rich.movie
@@ -170,10 +163,22 @@ fun MovieDetailScreen(
           loadStreamsAndSubs(sid, 0, 0, rich.detailPath)
         }
       } else {
+        loadStreamsAndSubs(sid, 0, 0, movie?.detailPath)
+      }
+      recommendations = recDeferred.await().filter { it.id != movieId }
+    } else {
+      val enriched = catalogRepository.getMovieDetail(movieId)
+      if (enriched != null) {
+        movie = enriched
+      }
+      val sid = enriched?.subjectId.orEmpty()
+      val recDeferred =
+        scope.async { catalogRepository.getRecommendations(sid, enriched?.genre ?: movie?.genre) }
+      if (sid.isNotBlank()) {
         loadStreamsAndSubs(sid, 0, 0, enriched?.detailPath)
       }
+      recommendations = recDeferred.await().filter { it.id != movieId }
     }
-    recommendations = recDeferred.await().filter { it.id != movieId }
     isEnriching = false
   }
 
@@ -188,7 +193,7 @@ fun MovieDetailScreen(
           verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
           Text(
-            text = "Film details unavailable",
+            text = "Title currently unavailable",
             style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.onBackground,
           )
@@ -600,7 +605,7 @@ fun MovieDetailScreen(
               }
             } else if (streams.isEmpty()) {
               Text(
-                text = "No direct CDN streams returned for this title right now. Tap refresh to retry.",
+                text = "Streams unavailable right now. Tap refresh to try again.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )

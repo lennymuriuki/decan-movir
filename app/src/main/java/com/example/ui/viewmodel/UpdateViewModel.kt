@@ -56,12 +56,12 @@ class UpdateViewModel(
             )
           }
         }
-        .onFailure { err ->
+        .onFailure {
           _uiState.update {
             it.copy(
               isChecking = false,
               checkedOnce = true,
-              errorMessage = err.localizedMessage ?: "Failed to check GitHub releases",
+              errorMessage = "Updates unavailable right now",
             )
           }
         }
