@@ -48,12 +48,14 @@ import com.example.data.model.SavedMovieEntry
 import com.example.ui.components.HeroSpotlightCard
 import com.example.ui.components.MoviePosterCard
 import com.example.ui.viewmodel.DiscoverUiState
+import com.example.ui.viewmodel.MediaFilter
 
 @Composable
 fun DiscoverScreen(
   uiState: DiscoverUiState,
   savedLibraryMap: Map<String, SavedMovieEntry>,
   onRefresh: () -> Unit,
+  onSelectMediaFilter: (MediaFilter) -> Unit,
   onSelectGenre: (String) -> Unit,
   onOpenMovie: (Movie) -> Unit,
   onToggleWatchlist: (Movie) -> Unit,
@@ -76,17 +78,27 @@ fun DiscoverScreen(
     return
   }
 
+  val mediaFiltered =
+    when (uiState.selectedMediaFilter) {
+      MediaFilter.ALL -> uiState.allMovies
+      MediaFilter.MOVIES ->
+        uiState.allMovies.filter { !it.mediaType.equals("Series", ignoreCase = true) }
+      MediaFilter.SERIES ->
+        uiState.allMovies.filter { it.mediaType.equals("Series", ignoreCase = true) }
+    }
+
+  val isGridMode = uiState.selectedGenre != "All" || uiState.selectedMediaFilter != MediaFilter.ALL
   val filteredMovies =
     if (uiState.selectedGenre == "All") {
-      emptyList()
+      mediaFiltered
     } else {
-      uiState.allMovies.filter { it.genre.equals(uiState.selectedGenre, ignoreCase = true) }
+      mediaFiltered.filter { it.genre.equals(uiState.selectedGenre, ignoreCase = true) }
     }
 
   LazyColumn(
     modifier = modifier.fillMaxSize().testTag("discover_list"),
     contentPadding = PaddingValues(bottom = 28.dp),
-    verticalArrangement = Arrangement.spacedBy(22.dp),
+    verticalArrangement = Arrangement.spacedBy(20.dp),
   ) {
     item {
       Row(
@@ -119,7 +131,7 @@ fun DiscoverScreen(
               color = MaterialTheme.colorScheme.onBackground,
             )
             Text(
-              text = "${uiState.allMovies.size} films • Live cinema feed",
+              text = "${uiState.allMovies.size} titles • Movies, Series & HD Streams",
               style = MaterialTheme.typography.labelMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -194,7 +206,7 @@ fun DiscoverScreen(
       }
     }
 
-    if (uiState.spotlight.isNotEmpty() && uiState.selectedGenre == "All") {
+    if (uiState.spotlight.isNotEmpty() && !isGridMode) {
       item {
         val pagerState = rememberPagerState(pageCount = { uiState.spotlight.size })
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -238,33 +250,62 @@ fun DiscoverScreen(
     }
 
     item {
-      LazyRow(
-        contentPadding = PaddingValues(horizontal = 20.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        items(uiState.availableGenres, key = { it }) { genre ->
-          val selected = genre == uiState.selectedGenre
-          FilterChip(
-            selected = selected,
-            onClick = { onSelectGenre(genre) },
-            label = { Text(genre, style = MaterialTheme.typography.labelLarge) },
-            colors =
-              FilterChipDefaults.filterChipColors(
-                selectedContainerColor = MaterialTheme.colorScheme.primary,
-                selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
-                containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-              ),
-            modifier = Modifier.testTag("discover_genre_$genre"),
-          )
+      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          MediaFilter.entries.forEach { filter ->
+            FilterChip(
+              selected = uiState.selectedMediaFilter == filter,
+              onClick = { onSelectMediaFilter(filter) },
+              label = { Text(filter.label, style = MaterialTheme.typography.labelLarge) },
+              colors =
+                FilterChipDefaults.filterChipColors(
+                  selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                  selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                  containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                  labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                ),
+              modifier = Modifier.testTag("media_filter_${filter.name}"),
+            )
+          }
+        }
+
+        LazyRow(
+          contentPadding = PaddingValues(horizontal = 20.dp),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          items(uiState.availableGenres, key = { it }) { genre ->
+            val selected = genre == uiState.selectedGenre
+            FilterChip(
+              selected = selected,
+              onClick = { onSelectGenre(genre) },
+              label = { Text(genre, style = MaterialTheme.typography.labelLarge) },
+              colors =
+                FilterChipDefaults.filterChipColors(
+                  selectedContainerColor = MaterialTheme.colorScheme.primary,
+                  selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                  containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                  labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                ),
+              modifier = Modifier.testTag("discover_genre_$genre"),
+            )
+          }
         }
       }
     }
 
-    if (uiState.selectedGenre != "All") {
+    if (isGridMode) {
       item {
+        val headerTitle =
+          buildString {
+            append(uiState.selectedMediaFilter.label)
+            if (uiState.selectedGenre != "All") append(" • ${uiState.selectedGenre}")
+            append(" (${filteredMovies.size})")
+          }
         Text(
-          text = "${uiState.selectedGenre} Collection (${filteredMovies.size})",
+          text = headerTitle,
           style = MaterialTheme.typography.headlineSmall,
           color = MaterialTheme.colorScheme.onBackground,
           modifier = Modifier.padding(horizontal = 20.dp),

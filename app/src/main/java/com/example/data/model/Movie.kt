@@ -19,6 +19,13 @@ data class Movie(
   val contentRating: String,
   val priceFormatted: String? = null,
   val storeUrl: String? = null,
+  val subjectId: String = "",
+  val mediaType: String = "Movie",
+  val imdbRating: String? = null,
+  val country: String? = null,
+  val language: String? = null,
+  val detailPath: String? = null,
+  val sourceProvider: String = "iTunes",
 ) {
   companion object {
     fun sanitizeId(raw: String): String {

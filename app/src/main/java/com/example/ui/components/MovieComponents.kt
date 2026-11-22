@@ -29,7 +29,6 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -153,16 +152,15 @@ fun MoviePosterCard(
       Box(
         modifier =
           Modifier.fillMaxWidth()
-            .height(64.dp)
+            .height(68.dp)
             .align(Alignment.BottomCenter)
             .background(
               Brush.verticalGradient(
-                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))
+                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.88f))
               )
             )
       )
 
-      // Quick Watchlist / Saved button
       FilledTonalIconButton(
         onClick = onToggleWatchlist,
         colors =
@@ -206,11 +204,24 @@ fun MoviePosterCard(
             modifier = Modifier.padding(5.dp).size(12.dp),
           )
         }
+      } else if (!movie.imdbRating.isNullOrBlank()) {
+        Surface(
+          color = Color.Black.copy(alpha = 0.72f),
+          shape = MaterialTheme.shapes.extraSmall,
+          modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+        ) {
+          Text(
+            text = "★ ${movie.imdbRating}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+          )
+        }
       }
 
       Row(
         modifier = Modifier.align(Alignment.BottomStart).padding(8.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
         Surface(
@@ -224,7 +235,31 @@ fun MoviePosterCard(
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
           )
         }
-        if (movie.previewUrl != null) {
+        if (movie.mediaType.equals("Series", ignoreCase = true)) {
+          Surface(
+            color = MaterialTheme.colorScheme.tertiary,
+            shape = MaterialTheme.shapes.extraSmall,
+          ) {
+            Text(
+              text = "SERIES",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onTertiary,
+              modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+            )
+          }
+        } else if (movie.subjectId.isNotBlank()) {
+          Surface(
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.92f),
+            shape = MaterialTheme.shapes.extraSmall,
+          ) {
+            Text(
+              text = "HD",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onPrimary,
+              modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+            )
+          }
+        } else if (movie.previewUrl != null) {
           Surface(
             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
             shape = MaterialTheme.shapes.extraSmall,
@@ -301,7 +336,9 @@ fun HeroSpotlightCard(
         modifier = Modifier.align(Alignment.TopStart).padding(16.dp),
       ) {
         Text(
-          text = "FEATURED SPOTLIGHT",
+          text =
+            if (movie.mediaType.equals("Series", ignoreCase = true)) "FEATURED SERIES"
+            else "FEATURED SPOTLIGHT",
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onPrimary,
           modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
@@ -318,7 +355,9 @@ fun HeroSpotlightCard(
         ) {
           MetadataChip(text = movie.genre)
           MetadataChip(text = movie.releaseYear)
-          if (movie.runtimeMinutes > 0) {
+          if (!movie.imdbRating.isNullOrBlank()) {
+            MetadataChip(text = "IMDb ${movie.imdbRating}")
+          } else if (movie.runtimeMinutes > 0) {
             MetadataChip(text = "${movie.runtimeMinutes}m")
           }
         }
@@ -359,7 +398,10 @@ fun HeroSpotlightCard(
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text(
-              text = if (movie.previewUrl != null) "Watch Trailer" else "View Details",
+              text =
+                if (movie.subjectId.isNotBlank()) "Streams & Download"
+                else if (movie.previewUrl != null) "Watch Trailer"
+                else "View Details",
               style = MaterialTheme.typography.labelLarge,
             )
           }
@@ -446,39 +488,25 @@ fun StarRatingBar(
 }
 
 @Composable
-fun FavoriteHeartButton(
-  isFavorite: Boolean,
-  onClick: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  IconButton(onClick = onClick, modifier = modifier.minimumInteractiveComponentSize()) {
-    Icon(
-      imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-      contentDescription = if (isFavorite) "Remove favorite" else "Mark favorite",
-      tint = if (isFavorite) MaterialTheme.colorScheme.secondary else Color.White,
-    )
-  }
-}
-
-@Composable
 fun TrailerVideoPlayer(
   previewUrl: String,
   movieTitle: String,
+  sectionTitle: String = "Official Trailer Preview",
+  headers: Map<String, String> = emptyMap(),
+  autoPlay: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
-  var isPlaying by remember(previewUrl) { mutableStateOf(false) }
+  var isPlaying by remember(previewUrl) { mutableStateOf(autoPlay) }
   var isMuted by remember(previewUrl) { mutableStateOf(false) }
-  var isBuffering by remember(previewUrl) { mutableStateOf(false) }
+  var isBuffering by remember(previewUrl) { mutableStateOf(autoPlay) }
   var hasError by remember(previewUrl) { mutableStateOf(false) }
   var videoViewRef by remember(previewUrl) { mutableStateOf<VideoView?>(null) }
   var mediaPlayerRef by remember(previewUrl) { mutableStateOf<MediaPlayer?>(null) }
 
   DisposableEffect(previewUrl) {
     onDispose {
-      runCatching {
-        videoViewRef?.stopPlayback()
-      }
+      runCatching { videoViewRef?.stopPlayback() }
       mediaPlayerRef = null
       videoViewRef = null
     }
@@ -495,9 +523,9 @@ fun TrailerVideoPlayer(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        Column {
+        Column(modifier = Modifier.weight(1f)) {
           Text(
-            text = "Official Trailer Preview",
+            text = sectionTitle,
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onSurface,
           )
@@ -519,7 +547,7 @@ fun TrailerVideoPlayer(
         ) {
           Icon(
             imageVector = Icons.AutoMirrored.Filled.OpenInNew,
-            contentDescription = "Open trailer externally",
+            contentDescription = "Open externally",
             tint = MaterialTheme.colorScheme.primary,
           )
         }
@@ -537,7 +565,13 @@ fun TrailerVideoPlayer(
           AndroidView(
             factory = { ctx ->
               VideoView(ctx).apply {
-                setVideoURI(Uri.parse(previewUrl))
+                tag = previewUrl
+                val uri = Uri.parse(previewUrl)
+                if (headers.isNotEmpty()) {
+                  setVideoURI(uri, headers)
+                } else {
+                  setVideoURI(uri)
+                }
                 setOnPreparedListener { mp ->
                   mediaPlayerRef = mp
                   isBuffering = false
@@ -563,6 +597,20 @@ fun TrailerVideoPlayer(
                   false
                 }
                 videoViewRef = this
+              }
+            },
+            update = { view ->
+              if (view.tag != previewUrl) {
+                view.tag = previewUrl
+                val uri = Uri.parse(previewUrl)
+                if (headers.isNotEmpty()) {
+                  view.setVideoURI(uri, headers)
+                } else {
+                  view.setVideoURI(uri)
+                }
+                if (autoPlay) {
+                  view.start()
+                }
               }
             },
             modifier = Modifier.fillMaxSize(),
@@ -626,7 +674,7 @@ fun TrailerVideoPlayer(
             ) {
               Icon(
                 imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                contentDescription = if (isPlaying) "Pause trailer" else "Play trailer",
+                contentDescription = if (isPlaying) "Pause video" else "Play video",
               )
             }
 
@@ -647,7 +695,7 @@ fun TrailerVideoPlayer(
                 imageVector =
                   if (isMuted) Icons.AutoMirrored.Filled.VolumeOff
                   else Icons.AutoMirrored.Filled.VolumeUp,
-                contentDescription = if (isMuted) "Unmute trailer" else "Mute trailer",
+                contentDescription = if (isMuted) "Unmute video" else "Mute video",
               )
             }
           }

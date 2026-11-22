@@ -4,7 +4,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.Movie
 import com.example.data.remote.MovieCatalogRepository
+import com.example.data.remote.moviebox.MovieBoxSuggestion
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,6 +27,7 @@ data class SearchUiState(
   val sortOption: MovieSortOption = MovieSortOption.FEATURED,
   val isLoading: Boolean = false,
   val results: List<Movie> = emptyList(),
+  val suggestions: List<MovieBoxSuggestion> = emptyList(),
   val isOfflineFallback: Boolean = false,
 )
 
@@ -45,7 +49,7 @@ class SearchViewModel(
     searchJob?.cancel()
     searchJob =
       viewModelScope.launch {
-        delay(320L)
+        delay(280L)
         executeSearch(newQuery)
       }
   }
@@ -63,13 +67,17 @@ class SearchViewModel(
     _uiState.update { it.copy(sortOption = option) }
   }
 
-  private suspend fun executeSearch(query: String) {
+  private suspend fun executeSearch(query: String) = coroutineScope {
     _uiState.update { it.copy(isLoading = true) }
-    val (movies, offline) = catalogRepository.searchMovies(query)
+    val searchDeferred = async { catalogRepository.searchMovies(query) }
+    val suggestDeferred = async { catalogRepository.searchSuggestions(query) }
+    val (movies, offline) = searchDeferred.await()
+    val suggestions = suggestDeferred.await()
     _uiState.update {
       it.copy(
         isLoading = false,
         results = movies,
+        suggestions = suggestions,
         isOfflineFallback = offline,
       )
     }

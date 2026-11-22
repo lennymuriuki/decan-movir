@@ -73,6 +73,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.launch
 
 private enum class TopTab(
   val route: String,
@@ -261,6 +262,7 @@ private fun AuthenticatedDecanApp(user: FirebaseUser) {
                 uiState = discoverState,
                 savedLibraryMap = savedLibraryMap,
                 onRefresh = discoverViewModel::refreshCatalog,
+                onSelectMediaFilter = discoverViewModel::selectMediaFilter,
                 onSelectGenre = discoverViewModel::selectGenre,
                 onOpenMovie = { movie -> navController.navigate("detail/${movie.id}") },
                 onToggleWatchlist = { movie ->
@@ -276,6 +278,9 @@ private fun AuthenticatedDecanApp(user: FirebaseUser) {
                 savedLibraryMap = savedLibraryMap,
                 onQueryChange = searchViewModel::onQueryChange,
                 onSubmitSearch = searchViewModel::submitSearch,
+                onSelectSuggestion = { sug ->
+                  navController.navigate("detail/mbox_${sug.subjectId}")
+                },
                 onSelectGenre = searchViewModel::selectGenre,
                 onSelectSort = searchViewModel::selectSortOption,
                 onOpenMovie = { movie -> navController.navigate("detail/${movie.id}") },
@@ -328,6 +333,14 @@ private fun AuthenticatedDecanApp(user: FirebaseUser) {
                 catalogRepository = catalogRepository,
                 isSaving = isSaving,
                 onBack = { navController.popBackStack() },
+                onSwitchSubject = { targetId ->
+                  navController.navigate("detail/$targetId") {
+                    popUpTo("detail/$movieId") { inclusive = true }
+                  }
+                },
+                onNotify = { msg ->
+                  scope.launch { snackbarHostState.showSnackbar(msg) }
+                },
                 onSaveEntry = { movie, status, fav, rating, note ->
                   libraryViewModel.saveEntryDetails(movie, status, fav, rating, note)
                 },

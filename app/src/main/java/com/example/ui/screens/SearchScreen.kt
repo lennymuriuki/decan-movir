@@ -17,9 +17,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MovieFilter
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -40,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.model.Movie
 import com.example.data.model.SavedMovieEntry
+import com.example.data.remote.moviebox.MovieBoxSuggestion
 import com.example.ui.components.MoviePosterCard
 import com.example.ui.viewmodel.MovieSortOption
 import com.example.ui.viewmodel.SearchUiState
@@ -50,6 +53,7 @@ fun SearchScreen(
   savedLibraryMap: Map<String, SavedMovieEntry>,
   onQueryChange: (String) -> Unit,
   onSubmitSearch: () -> Unit,
+  onSelectSuggestion: (MovieBoxSuggestion) -> Unit,
   onSelectGenre: (String) -> Unit,
   onSelectSort: (MovieSortOption) -> Unit,
   onOpenMovie: (Movie) -> Unit,
@@ -121,6 +125,26 @@ fun SearchScreen(
           ),
         modifier = Modifier.fillMaxWidth().testTag("movie_search_input"),
       )
+
+      if (uiState.suggestions.isNotEmpty() && uiState.query.isNotBlank()) {
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          items(uiState.suggestions, key = { "${it.subjectId}_${it.title}" }) { sug ->
+            AssistChip(
+              onClick = { onSelectSuggestion(sug) },
+              leadingIcon = {
+                Icon(
+                  imageVector = Icons.Filled.AutoAwesome,
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp),
+                  tint = MaterialTheme.colorScheme.primary,
+                )
+              },
+              label = { Text(sug.title, style = MaterialTheme.typography.labelMedium) },
+              modifier = Modifier.testTag("search_suggestion_${sug.subjectId}"),
+            )
+          }
+        }
+      }
 
       Row(
         horizontalArrangement = Arrangement.spacedBy(8.dp),

@@ -11,11 +11,18 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+enum class MediaFilter(val label: String) {
+  ALL("All"),
+  MOVIES("Movies"),
+  SERIES("TV Series"),
+}
+
 data class DiscoverUiState(
   val isLoading: Boolean = true,
   val spotlight: List<Movie> = emptyList(),
   val rails: List<MovieRail> = emptyList(),
   val allMovies: List<Movie> = emptyList(),
+  val selectedMediaFilter: MediaFilter = MediaFilter.ALL,
   val selectedGenre: String = "All",
   val availableGenres: List<String> = listOf("All"),
   val isOfflineFallback: Boolean = false,
@@ -45,7 +52,7 @@ class DiscoverViewModel(
               .filter { it.isNotBlank() }
               .distinct()
               .sorted()
-              .take(8)
+              .take(10)
 
         _uiState.update {
           it.copy(
@@ -71,5 +78,9 @@ class DiscoverViewModel(
 
   fun selectGenre(genre: String) {
     _uiState.update { it.copy(selectedGenre = genre) }
+  }
+
+  fun selectMediaFilter(filter: MediaFilter) {
+    _uiState.update { it.copy(selectedMediaFilter = filter) }
   }
 }
