@@ -1,0 +1,6 @@
+{
+  "name": "Decan Movie",
+  "description": "A cinema discovery, trailer preview, and personal watchlist Android app.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,115 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidUserProfile(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 120)) &&
+             (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 500)) &&
+             (!('preferredGenre' in data) || (data.preferredGenre is string && data.preferredGenre.size() <= 40)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidSavedMovieEntry(data, userId, movieId) {
+      return data.userId is string && data.userId == userId &&
+             data.movieId is string && data.movieId == movieId &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+             data.director is string && data.director.size() <= 120 &&
+             data.genre is string && data.genre.size() >= 1 && data.genre.size() <= 60 &&
+             data.releaseYear is string && data.releaseYear.size() <= 10 &&
+             data.posterUrl is string && data.posterUrl.size() <= 500 &&
+             (!('previewUrl' in data) || (data.previewUrl is string && data.previewUrl.size() <= 500)) &&
+             (!('synopsis' in data) || (data.synopsis is string && data.synopsis.size() <= 2000)) &&
+             data.runtimeMinutes is int && data.runtimeMinutes >= 0 && data.runtimeMinutes <= 1000 &&
+             (!('contentRating' in data) || (data.contentRating is string && data.contentRating.size() <= 20)) &&
+             data.watchStatus in ['WANT_TO_WATCH', 'WATCHING', 'WATCHED'] &&
+             data.favorite is bool &&
+             data.personalRating is int && data.personalRating >= 0 && data.personalRating <= 5 &&
+             (!('personalNote' in data) || (data.personalNote is string && data.personalNote.size() <= 1000)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().keys().hasAll(['userId', 'displayName', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'displayName', 'email', 'photoUrl', 'preferredGenre', 'createdAt', 'updatedAt']) &&
+                       isValidUserProfile(incoming());
+
+      allow update: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'photoUrl', 'preferredGenre', 'updatedAt']);
+
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      match /library/{movieId} {
+        allow get: if isOwner(userId) && isValidId(movieId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(movieId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'movieId', 'title', 'director', 'genre',
+                           'releaseYear', 'posterUrl', 'runtimeMinutes',
+                           'watchStatus', 'favorite', 'personalRating',
+                           'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'movieId', 'title', 'director', 'genre',
+                           'releaseYear', 'posterUrl', 'previewUrl', 'synopsis',
+                           'runtimeMinutes', 'contentRating', 'watchStatus',
+                           'favorite', 'personalRating', 'personalNote',
+                           'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidSavedMovieEntry(incoming(), userId, movieId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(movieId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().movieId == existing().movieId &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidSavedMovieEntry(incoming(), userId, movieId) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'title', 'director', 'genre', 'releaseYear', 'posterUrl',
+                           'previewUrl', 'synopsis', 'runtimeMinutes', 'contentRating',
+                           'watchStatus', 'favorite', 'personalRating', 'personalNote',
+                           'updatedAt'
+                         ]);
+
+        allow delete: if isOwner(userId) && isValidId(movieId);
+      }
+    }
+  }
+}

@@ -1,0 +1,145 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated Decan Movie viewer profile and genre preference.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the profile owner."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Viewer display name."
+        },
+        "email": {
+          "type": "string",
+          "description": "Viewer email address (optional)."
+        },
+        "photoUrl": {
+          "type": "string",
+          "description": "Profile avatar URL (optional)."
+        },
+        "preferredGenre": {
+          "type": "string",
+          "description": "Favorite cinema genre filter (optional)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Profile creation server timestamp (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update server timestamp (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": ["userId", "displayName", "createdAt", "updatedAt"]
+    },
+    "SavedMovieEntry": {
+      "title": "SavedMovieEntry",
+      "description": "A user-saved movie in Watchlist, Watching, or Watched with favorite flag, rating, and personal review note.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID."
+        },
+        "movieId": {
+          "type": "string",
+          "description": "Unique sanitized movie identifier matching document ID."
+        },
+        "title": {
+          "type": "string",
+          "description": "Movie title."
+        },
+        "director": {
+          "type": "string",
+          "description": "Director or primary filmmaker."
+        },
+        "genre": {
+          "type": "string",
+          "description": "Primary movie genre."
+        },
+        "releaseYear": {
+          "type": "string",
+          "description": "4-digit release year string."
+        },
+        "posterUrl": {
+          "type": "string",
+          "description": "Movie poster artwork URL."
+        },
+        "previewUrl": {
+          "type": "string",
+          "description": "Playable trailer MP4/M4V URL (optional)."
+        },
+        "synopsis": {
+          "type": "string",
+          "description": "Movie synopsis text (optional)."
+        },
+        "runtimeMinutes": {
+          "type": "integer",
+          "description": "Runtime in minutes."
+        },
+        "contentRating": {
+          "type": "string",
+          "description": "Advisory rating such as PG-13 or R (optional)."
+        },
+        "watchStatus": {
+          "type": "string",
+          "enum": ["WANT_TO_WATCH", "WATCHING", "WATCHED"],
+          "description": "User watch progress status."
+        },
+        "favorite": {
+          "type": "boolean",
+          "description": "Whether the movie is starred as a favorite."
+        },
+        "personalRating": {
+          "type": "integer",
+          "description": "User rating from 0 (unrated) to 5 stars."
+        },
+        "personalNote": {
+          "type": "string",
+          "description": "Personal review or viewing note (optional)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Entry creation server timestamp (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Entry last update server timestamp (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "movieId",
+        "title",
+        "director",
+        "genre",
+        "releaseYear",
+        "posterUrl",
+        "runtimeMinutes",
+        "watchStatus",
+        "favorite",
+        "personalRating",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private viewer profile and preferences."
+    },
+    "/users/{userId}/library/{movieId}": {
+      "schema": { "$ref": "#/entities/SavedMovieEntry" },
+      "description": "User-scoped movie watchlist, watched history, favorites, and personal reviews."
+    }
+  }
+}
