@@ -1,8 +1,9 @@
 <resources>
     <string name="app_name">Decan Movie</string>
     <string name="tagline_cinema">Curated Cinema &amp; Personal Watchlist</string>
-    <string name="auth_subtitle">Discover featured films, stream instant trailers, and keep your watchlist, watched log, and star reviews synced across devices.</string>
+    <string name="auth_subtitle">Discover featured films, stream instant trailers, download episodes, and keep your watchlist—sign in anytime or continue as guest.</string>
     <string name="sign_in_google">Sign in with Google</string>
+    <string name="skip_sign_in">Skip &amp; Continue as Guest</string>
     <string name="sign_out">Sign out</string>
     <string name="nav_discover">Discover</string>
     <string name="nav_search">Search</string>

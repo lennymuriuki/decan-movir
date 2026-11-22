@@ -9,17 +9,12 @@ import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmarks
@@ -34,9 +29,6 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -58,7 +50,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -92,6 +83,7 @@ import com.example.data.model.WatchStatus
 import com.example.data.remote.MovieCatalogRepository
 import com.example.data.settings.AppSettings
 import com.example.data.settings.AppSettingsRepository
+import com.example.data.settings.LocalLibraryStore
 import com.example.data.settings.PlaybackProgressStore
 import com.example.notifications.DecanNotificationManager
 import com.example.ui.components.NotificationCenterSheet
@@ -154,12 +146,17 @@ fun DecanApp(
 ) {
   val context = LocalContext.current
   val isFirebaseReady = remember(context) { FirebaseApp.getApps(context).isNotEmpty() }
+  val localLibraryStore = remember(context) { LocalLibraryStore(context) }
+  val appSettings by settingsRepository.settings.collectAsStateWithLifecycle()
 
   if (!isFirebaseReady) {
-    CatalogOnlyDecanApp(
+    GuestDecanApp(
+      isFirebaseConfigured = false,
+      localLibraryStore = localLibraryStore,
       settingsRepository = settingsRepository,
       pendingDeepLink = pendingDeepLink,
       onConsumedDeepLink = onConsumedDeepLink,
+      onAuthSuccess = {},
     )
     return
   }
@@ -173,25 +170,45 @@ fun DecanApp(
   }
 
   val user = currentUser
-  if (user == null) {
-    AuthScreen(onAuthSuccess = { currentUser = Firebase.auth.currentUser })
-  } else {
-    key(user.uid) {
-      AuthenticatedDecanApp(
-        user = user,
+  when {
+    user != null -> {
+      key(user.uid) {
+        AuthenticatedDecanApp(
+          user = user,
+          localLibraryStore = localLibraryStore,
+          settingsRepository = settingsRepository,
+          pendingDeepLink = pendingDeepLink,
+          onConsumedDeepLink = onConsumedDeepLink,
+        )
+      }
+    }
+    appSettings.skippedSignIn -> {
+      GuestDecanApp(
+        isFirebaseConfigured = true,
+        localLibraryStore = localLibraryStore,
         settingsRepository = settingsRepository,
         pendingDeepLink = pendingDeepLink,
         onConsumedDeepLink = onConsumedDeepLink,
+        onAuthSuccess = { currentUser = Firebase.auth.currentUser },
+      )
+    }
+    else -> {
+      AuthScreen(
+        onAuthSuccess = { currentUser = Firebase.auth.currentUser },
+        onSkipSignIn = { settingsRepository.setSkippedSignIn(true) },
       )
     }
   }
 }
 
 @Composable
-private fun CatalogOnlyDecanApp(
+private fun GuestDecanApp(
+  isFirebaseConfigured: Boolean,
+  localLibraryStore: LocalLibraryStore,
   settingsRepository: AppSettingsRepository,
   pendingDeepLink: NotificationDeepLink?,
   onConsumedDeepLink: () -> Unit,
+  onAuthSuccess: () -> Unit,
 ) {
   val scope = rememberCoroutineScope()
   val catalogRepository = remember { MovieCatalogRepository() }
@@ -210,12 +227,22 @@ private fun CatalogOnlyDecanApp(
       key = "updates_guest",
       factory = viewModelFactory { initializer { UpdateViewModel() } },
     )
+
+  val localEntries by localLibraryStore.entries.collectAsStateWithLifecycle()
+  var selectedLibraryFilter by remember { mutableStateOf(LibraryFilter.ALL) }
+  val savedLibraryMap =
+    remember(localEntries) { localEntries.associateBy { it.movieId.ifBlank { it.id } } }
+
   val snackbarHostState = remember { SnackbarHostState() }
+  fun notify(msg: String) {
+    scope.launch { snackbarHostState.showSnackbar(msg) }
+  }
 
   DecanMainShell(
-    isFirebaseConfigured = false,
+    isFirebaseConfigured = isFirebaseConfigured,
+    isSignedIn = false,
     userProfile = null,
-    userDisplayName = null,
+    userDisplayName = "Guest Cinema",
     userEmail = null,
     userPhotoUrl = null,
     catalogRepository = catalogRepository,
@@ -223,34 +250,37 @@ private fun CatalogOnlyDecanApp(
     discoverViewModel = discoverViewModel,
     searchViewModel = searchViewModel,
     updateViewModel = updateViewModel,
-    libraryState = LibraryUiState.Success(emptyList()),
-    savedLibraryMap = emptyMap(),
-    selectedLibraryFilter = LibraryFilter.ALL,
+    libraryState = LibraryUiState.Success(localEntries),
+    savedLibraryMap = savedLibraryMap,
+    selectedLibraryFilter = selectedLibraryFilter,
     isSavingLibrary = false,
     pendingDeepLink = pendingDeepLink,
     onConsumedDeepLink = onConsumedDeepLink,
     snackbarHostState = snackbarHostState,
-    onNotify = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } },
-    onSelectLibraryFilter = {},
-    onToggleQuickWatchlist = {
-      scope.launch {
-        snackbarHostState.showSnackbar("Cloud Watchlist is unavailable right now")
-      }
+    onNotify = ::notify,
+    onSelectLibraryFilter = { selectedLibraryFilter = it },
+    onToggleQuickWatchlist = { movie ->
+      val existing = savedLibraryMap[movie.id] ?: savedLibraryMap[Movie.sanitizeId(movie.id)]
+      notify(localLibraryStore.toggleQuickWatchlist(movie, existing))
     },
-    onToggleFavorite = {},
-    onSaveEntryDetails = { _, _, _, _, _ ->
-      scope.launch {
-        snackbarHostState.showSnackbar("Cloud Watchlist is unavailable right now")
-      }
+    onToggleFavorite = { entry ->
+      notify(localLibraryStore.toggleFavorite(entry.toMovie(), entry))
     },
-    onRemoveLibraryMovie = { _, _ -> },
+    onSaveEntryDetails = { movie, status, fav, rating, note ->
+      notify(localLibraryStore.saveEntryDetails(movie, status, fav, rating, note))
+    },
+    onRemoveLibraryMovie = { movieId, title ->
+      notify(localLibraryStore.removeMovie(movieId, title))
+    },
     onSignOut = null,
+    onAuthSuccess = onAuthSuccess,
   )
 }
 
 @Composable
 private fun AuthenticatedDecanApp(
   user: FirebaseUser,
+  localLibraryStore: LocalLibraryStore,
   settingsRepository: AppSettingsRepository,
   pendingDeepLink: NotificationDeepLink?,
   onConsumedDeepLink: () -> Unit,
@@ -292,7 +322,13 @@ private fun AuthenticatedDecanApp(
         },
     )
 
-  LaunchedEffect(user.uid) { libraryViewModel.syncUserProfile(user) }
+  LaunchedEffect(user.uid) {
+    libraryViewModel.syncUserProfile(user)
+    val guestEntries = localLibraryStore.entries.value
+    if (guestEntries.isNotEmpty()) {
+      libraryViewModel.importGuestEntries(guestEntries) { localLibraryStore.clearAll() }
+    }
+  }
 
   val libraryState by libraryViewModel.libraryState.collectAsStateWithLifecycle()
   val userProfile by libraryViewModel.userProfile.collectAsStateWithLifecycle()
@@ -317,6 +353,7 @@ private fun AuthenticatedDecanApp(
 
   DecanMainShell(
     isFirebaseConfigured = true,
+    isSignedIn = true,
     userProfile = userProfile,
     userDisplayName = user.displayName ?: "Cinema Viewer",
     userEmail = user.email.orEmpty(),
@@ -343,13 +380,21 @@ private fun AuthenticatedDecanApp(
     },
     onSaveEntryDetails = libraryViewModel::saveEntryDetails,
     onRemoveLibraryMovie = libraryViewModel::removeMovie,
-    onSignOut = { signOut(credentialManager = credentialManager, scope = scope) },
+    onSignOut = {
+      settingsRepository.setSkippedSignIn(true)
+      signOut(
+        credentialManager = credentialManager,
+        scope = scope,
+      )
+    },
+    onAuthSuccess = {},
   )
 }
 
 @Composable
 private fun DecanMainShell(
   isFirebaseConfigured: Boolean,
+  isSignedIn: Boolean,
   userProfile: UserProfile?,
   userDisplayName: String?,
   userEmail: String?,
@@ -373,6 +418,7 @@ private fun DecanMainShell(
   onSaveEntryDetails: (Movie, WatchStatus, Boolean, Int, String) -> Unit,
   onRemoveLibraryMovie: (String, String) -> Unit,
   onSignOut: (() -> Unit)?,
+  onAuthSuccess: () -> Unit,
 ) {
   val context = LocalContext.current
   val progressStore = remember(context) { PlaybackProgressStore(context) }
@@ -626,65 +672,29 @@ private fun DecanMainShell(
             }
 
             composable(TopTab.LIBRARY.route) {
-              if (!isFirebaseConfigured) {
-                Box(
-                  modifier =
-                    Modifier.fillMaxSize()
-                      .windowInsetsPadding(WindowInsets.statusBars)
-                      .padding(24.dp),
-                  contentAlignment = Alignment.Center,
-                ) {
-                  Card(
-                    colors =
-                      CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainer
-                      ),
-                    shape = MaterialTheme.shapes.large,
-                    modifier = Modifier.fillMaxWidth().widthIn(max = 520.dp),
-                  ) {
-                    Column(
-                      modifier = Modifier.padding(24.dp),
-                      verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                      Text(
-                        text = "Cloud Sync Unavailable",
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                      )
-                      Text(
-                        text =
-                          "Cloud Watchlist & Google Sign-In are unavailable in this build. Streaming, Theater Player, search, and offline downloads work normally.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                      )
-                      Spacer(modifier = Modifier.height(4.dp))
-                      Button(onClick = { navigateTopTab(TopTab.DISCOVER) }) {
-                        Text("Browse Movies & Series")
-                      }
-                    }
-                  }
-                }
-              } else {
-                LibraryScreen(
-                  libraryState = libraryState,
-                  userProfile = userProfile,
-                  userDisplayName = userDisplayName ?: "Cinema Viewer",
-                  userEmail = userEmail.orEmpty(),
-                  userPhotoUrl = userPhotoUrl,
-                  selectedFilter = selectedLibraryFilter,
-                  onSelectFilter = onSelectLibraryFilter,
-                  onOpenMovie = { entry ->
-                    navController.navigate(buildDetailRoute(entry.movieId.ifBlank { entry.id }))
-                  },
-                  onToggleFavorite = onToggleFavorite,
-                  onRemoveEntry = { entry ->
-                    onRemoveLibraryMovie(entry.movieId.ifBlank { entry.id }, entry.title)
-                  },
-                  onExploreMovies = { navigateTopTab(TopTab.DISCOVER) },
-                  onSignOut = { onSignOut?.invoke() },
-                  modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
-                )
-              }
+              LibraryScreen(
+                libraryState = libraryState,
+                userProfile = userProfile,
+                userDisplayName = userDisplayName ?: "Cinema Viewer",
+                userEmail = userEmail.orEmpty(),
+                userPhotoUrl = userPhotoUrl,
+                isGuestMode = !isSignedIn,
+                isFirebaseConfigured = isFirebaseConfigured,
+                selectedFilter = selectedLibraryFilter,
+                onSelectFilter = onSelectLibraryFilter,
+                onOpenMovie = { entry ->
+                  navController.navigate(buildDetailRoute(entry.movieId.ifBlank { entry.id }))
+                },
+                onToggleFavorite = onToggleFavorite,
+                onRemoveEntry = { entry ->
+                  onRemoveLibraryMovie(entry.movieId.ifBlank { entry.id }, entry.title)
+                },
+                onExploreMovies = { navigateTopTab(TopTab.DISCOVER) },
+                onSignOut = { onSignOut?.invoke() },
+                onAuthSuccess = onAuthSuccess,
+                onAuthError = onNotify,
+                modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
+              )
             }
 
             composable(TopTab.SETTINGS.route) {
@@ -692,10 +702,12 @@ private fun DecanMainShell(
                 appSettings = appSettings,
                 updateState = updateState,
                 isFirebaseConfigured = isFirebaseConfigured,
+                isSignedIn = isSignedIn,
                 userDisplayName = userDisplayName,
                 userEmail = userEmail,
                 userPhotoUrl = userPhotoUrl,
                 onSignOut = onSignOut,
+                onAuthSuccess = onAuthSuccess,
                 onSetThemeMode = settingsRepository::setThemeMode,
                 onSetPreferredQuality = settingsRepository::setPreferredQuality,
                 onSetAutoPlayNext = settingsRepository::setAutoPlayNextEpisode,
@@ -744,7 +756,7 @@ private fun DecanMainShell(
               val movieId = Uri.decode(entry.arguments?.getString("movieId").orEmpty())
               MovieDetailScreen(
                 movieId = movieId,
-                savedEntry = savedLibraryMap[movieId],
+                savedEntry = savedLibraryMap[movieId] ?: savedLibraryMap[Movie.sanitizeId(movieId)],
                 savedLibraryMap = savedLibraryMap,
                 catalogRepository = catalogRepository,
                 allowMeteredDownloads = appSettings.allowMeteredDownloads,
@@ -823,7 +835,8 @@ private fun DecanMainShell(
                 initialPositionMs = pos,
                 localPlayUri = decodedLocalUri,
                 localTitle = decodedLocalTitle,
-                savedEntry = savedLibraryMap[decodedMovieId],
+                savedEntry =
+                  savedLibraryMap[decodedMovieId] ?: savedLibraryMap[Movie.sanitizeId(decodedMovieId)],
                 savedLibraryMap = savedLibraryMap,
                 catalogRepository = catalogRepository,
                 appSettings = appSettings,

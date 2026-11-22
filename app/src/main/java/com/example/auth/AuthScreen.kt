@@ -1,6 +1,7 @@
 package com.example.auth
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -15,10 +16,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.LocalMovies
 import androidx.compose.material.icons.filled.MovieFilter
 import androidx.compose.material.icons.filled.Star
@@ -26,8 +31,10 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -43,6 +50,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -53,6 +61,7 @@ import com.example.R
 @Composable
 fun AuthScreen(
   onAuthSuccess: () -> Unit,
+  onSkipSignIn: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
@@ -96,6 +105,7 @@ fun AuthScreen(
     Column(
       modifier =
         Modifier.fillMaxSize()
+          .verticalScroll(rememberScrollState())
           .windowInsetsPadding(WindowInsets.safeDrawing)
           .padding(horizontal = 24.dp, vertical = 28.dp)
           .widthIn(max = 520.dp)
@@ -103,34 +113,48 @@ fun AuthScreen(
       verticalArrangement = Arrangement.SpaceBetween,
     ) {
       Row(
+        modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
       ) {
-        Surface(
-          color = MaterialTheme.colorScheme.primaryContainer,
-          shape = CircleShape,
-          modifier = Modifier.size(44.dp),
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+          modifier = Modifier.weight(1f),
         ) {
-          Box(contentAlignment = Alignment.Center) {
-            Icon(
-              imageVector = Icons.Filled.LocalMovies,
-              contentDescription = stringResource(R.string.app_name),
-              tint = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.size(24.dp),
+          Surface(
+            color = MaterialTheme.colorScheme.primaryContainer,
+            shape = CircleShape,
+            modifier = Modifier.size(44.dp),
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Icon(
+                imageVector = Icons.Filled.LocalMovies,
+                contentDescription = stringResource(R.string.app_name),
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp),
+              )
+            }
+          }
+          Column {
+            Text(
+              text = stringResource(R.string.app_name),
+              style = MaterialTheme.typography.titleLarge,
+              color = MaterialTheme.colorScheme.onBackground,
+            )
+            Text(
+              text = stringResource(R.string.tagline_cinema),
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.primary,
             )
           }
         }
-        Column {
-          Text(
-            text = stringResource(R.string.app_name),
-            style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onBackground,
-          )
-          Text(
-            text = stringResource(R.string.tagline_cinema),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
-          )
+
+        TextButton(
+          onClick = onSkipSignIn,
+          modifier = Modifier.testTag("skip_sign_in_top_button"),
+        ) {
+          Text("Skip", style = MaterialTheme.typography.labelLarge)
         }
       }
 
@@ -170,22 +194,52 @@ fun AuthScreen(
             shape = MaterialTheme.shapes.medium,
             modifier = Modifier.fillMaxWidth(),
           ) {
-            Text(
-              text = errorMessage.orEmpty(),
-              style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onSecondaryContainer,
+            Column(
               modifier = Modifier.padding(14.dp),
-            )
+              verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              Text(
+                text = errorMessage.orEmpty(),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+              )
+              Text(
+                text =
+                  "Sign-in is optional — tap \"Skip & Continue as Guest\" below to unlock everything immediately.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f),
+              )
+            }
           }
         }
 
-        GoogleSignInButton(
-          onAuthSuccess = {
-            errorMessage = null
-            onAuthSuccess()
-          },
-          onAuthError = { msg -> errorMessage = msg },
-        )
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+          GoogleSignInButton(
+            onAuthSuccess = {
+              errorMessage = null
+              onAuthSuccess()
+            },
+            onAuthError = { msg -> errorMessage = msg },
+          )
+
+          OutlinedButton(
+            onClick = onSkipSignIn,
+            shape = MaterialTheme.shapes.large,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier.fillMaxWidth().height(52.dp).testTag("skip_sign_in_button"),
+          ) {
+            Text(
+              text = stringResource(R.string.skip_sign_in),
+              style = MaterialTheme.typography.titleMedium,
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Icon(
+              imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+              contentDescription = null,
+              modifier = Modifier.size(18.dp),
+            )
+          }
+        }
 
         Spacer(modifier = Modifier.height(4.dp))
       }

@@ -39,7 +39,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,6 +51,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.R
+import com.example.auth.GoogleSignInButton
 import com.example.data.model.SavedMovieEntry
 import com.example.data.model.UserProfile
 import com.example.data.model.WatchStatus
@@ -66,6 +66,8 @@ fun LibraryScreen(
   userDisplayName: String,
   userEmail: String,
   userPhotoUrl: String?,
+  isGuestMode: Boolean = false,
+  isFirebaseConfigured: Boolean = true,
   selectedFilter: LibraryFilter,
   onSelectFilter: (LibraryFilter) -> Unit,
   onOpenMovie: (SavedMovieEntry) -> Unit,
@@ -73,6 +75,8 @@ fun LibraryScreen(
   onRemoveEntry: (SavedMovieEntry) -> Unit,
   onExploreMovies: () -> Unit,
   onSignOut: () -> Unit,
+  onAuthSuccess: () -> Unit = {},
+  onAuthError: (String) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   LazyColumn(
@@ -125,37 +129,54 @@ fun LibraryScreen(
 
               Column {
                 Text(
-                  text = userProfile?.displayName?.ifBlank { userDisplayName } ?: userDisplayName,
+                  text =
+                    if (isGuestMode) "Guest Cinema"
+                    else userProfile?.displayName?.ifBlank { userDisplayName } ?: userDisplayName,
                   style = MaterialTheme.typography.titleLarge,
                   color = MaterialTheme.colorScheme.onSurface,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis,
                 )
-                if (userEmail.isNotBlank()) {
-                  Text(
-                    text = userEmail,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                  )
-                }
+                val subtitleText =
+                  when {
+                    !isGuestMode && userEmail.isNotBlank() -> userEmail
+                    isGuestMode && isFirebaseConfigured ->
+                      "Saved locally on device • Sign in anytime to sync"
+                    else -> "Saved locally on this device"
+                  }
+                Text(
+                  text = subtitleText,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  maxLines = 2,
+                  overflow = TextOverflow.Ellipsis,
+                )
               }
             }
 
-            OutlinedButton(
-              onClick = onSignOut,
-              shape = MaterialTheme.shapes.medium,
-              modifier = Modifier.testTag("sign_out_button"),
-            ) {
-              Icon(
-                imageVector = Icons.AutoMirrored.Filled.Logout,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-              )
-              Spacer(modifier = Modifier.width(6.dp))
-              Text(stringResource(R.string.sign_out), style = MaterialTheme.typography.labelLarge)
+            if (!isGuestMode) {
+              OutlinedButton(
+                onClick = onSignOut,
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.testTag("sign_out_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.AutoMirrored.Filled.Logout,
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(stringResource(R.string.sign_out), style = MaterialTheme.typography.labelLarge)
+              }
             }
+          }
+
+          if (isGuestMode && isFirebaseConfigured) {
+            GoogleSignInButton(
+              onAuthSuccess = onAuthSuccess,
+              onAuthError = onAuthError,
+              modifier = Modifier.testTag("library_sign_in_button"),
+            )
           }
 
           if (libraryState is LibraryUiState.Success) {

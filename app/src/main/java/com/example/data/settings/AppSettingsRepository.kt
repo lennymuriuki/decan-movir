@@ -27,6 +27,7 @@ data class AppSettings(
   val enableTrendingNotifications: Boolean = true,
   val lastNotifiedReleaseTag: String = "",
   val githubRepo: String = DEFAULT_GITHUB_REPO,
+  val skippedSignIn: Boolean = false,
 ) {
   companion object {
     const val DEFAULT_GITHUB_REPO = "lennymuriuki4/decan-movir"
@@ -58,6 +59,7 @@ class AppSettingsRepository(context: Context) {
       githubRepo =
         prefs.getString(KEY_GITHUB_REPO, AppSettings.DEFAULT_GITHUB_REPO)
           ?.takeIf { it.isNotBlank() } ?: AppSettings.DEFAULT_GITHUB_REPO,
+      skippedSignIn = prefs.getBoolean(KEY_SKIPPED_SIGN_IN, false),
     )
   }
 
@@ -123,6 +125,11 @@ class AppSettingsRepository(context: Context) {
     _settings.update { it.copy(githubRepo = finalRepo) }
   }
 
+  fun setSkippedSignIn(skipped: Boolean) {
+    prefs.edit().putBoolean(KEY_SKIPPED_SIGN_IN, skipped).apply()
+    _settings.update { it.copy(skippedSignIn = skipped) }
+  }
+
   private companion object {
     const val KEY_THEME = "theme_mode"
     const val KEY_QUALITY = "preferred_quality"
@@ -136,5 +143,6 @@ class AppSettingsRepository(context: Context) {
     const val KEY_NOTIF_TRENDING = "notif_trending"
     const val KEY_LAST_NOTIFIED_TAG = "last_notified_tag"
     const val KEY_GITHUB_REPO = "github_repo"
+    const val KEY_SKIPPED_SIGN_IN = "skipped_sign_in"
   }
 }

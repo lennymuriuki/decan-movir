@@ -35,6 +35,7 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.NoCredentialException
 import com.example.R
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
@@ -203,9 +204,12 @@ fun onGoogleSignInClicked(
     } catch (e: GetCredentialCancellationException) {
       Log.w("Auth", "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
       onAuthCancelled()
+    } catch (e: NoCredentialException) {
+      Log.w("Auth", "No Google account available for Credential Manager: ${e.message}", e)
+      onAuthError("No Google account available on this device. You can skip sign-in and use Guest Mode.")
     } catch (e: Exception) {
       Log.e("Auth", "Google Sign-In failed", e)
-      onAuthError(e.localizedMessage ?: "Sign in failed")
+      onAuthError(e.localizedMessage ?: "Sign in failed — you can continue as Guest.")
     }
   }
 }

@@ -97,6 +97,28 @@ class LibraryViewModel(
     viewModelScope.launch { libraryRepository.ensureUserProfile(user) }
   }
 
+  fun importGuestEntries(guestEntries: List<SavedMovieEntry>, onImported: () -> Unit) {
+    if (guestEntries.isEmpty()) return
+    viewModelScope.launch {
+      var syncedAny = false
+      guestEntries.forEach { entry ->
+        val res =
+          libraryRepository.saveOrUpdateLibraryEntry(
+            movie = entry.toMovie(),
+            watchStatus = entry.watchStatusEnum(),
+            favorite = entry.favorite,
+            personalRating = entry.personalRating.toInt(),
+            personalNote = entry.personalNote,
+          )
+        if (res.isSuccess) syncedAny = true
+      }
+      if (syncedAny) {
+        onImported()
+        _actionMessage.value = "Synced ${guestEntries.size} saved title(s) to your account"
+      }
+    }
+  }
+
   fun selectFilter(filter: LibraryFilter) {
     _selectedFilter.update { filter }
   }

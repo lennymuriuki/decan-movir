@@ -63,6 +63,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.BuildConfig
+import com.example.auth.GoogleSignInButton
 import com.example.data.settings.AppSettings
 import com.example.data.settings.AppThemeMode
 import com.example.notifications.DecanNotificationManager
@@ -74,10 +75,12 @@ fun SettingsScreen(
   appSettings: AppSettings,
   updateState: UpdateUiState,
   isFirebaseConfigured: Boolean,
+  isSignedIn: Boolean,
   userDisplayName: String?,
   userEmail: String?,
   userPhotoUrl: String?,
   onSignOut: (() -> Unit)?,
+  onAuthSuccess: () -> Unit,
   onSetThemeMode: (AppThemeMode) -> Unit,
   onSetPreferredQuality: (Int) -> Unit,
   onSetAutoPlayNext: (Boolean) -> Unit,
@@ -158,7 +161,7 @@ fun SettingsScreen(
                 Box(contentAlignment = Alignment.Center) {
                   Icon(
                     imageVector =
-                      if (isFirebaseConfigured) Icons.Filled.CloudDone else Icons.Filled.CloudOff,
+                      if (isSignedIn) Icons.Filled.CloudDone else Icons.Filled.CloudOff,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                   )
@@ -169,8 +172,10 @@ fun SettingsScreen(
             Column(modifier = Modifier.weight(1f)) {
               Text(
                 text =
-                  if (isFirebaseConfigured) (userDisplayName?.ifBlank { "Google Account" } ?: "Signed In")
-                  else "Catalog Guest Mode",
+                  when {
+                    isSignedIn -> userDisplayName?.ifBlank { "Google Account" } ?: "Signed In"
+                    else -> "Guest Mode"
+                  },
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
@@ -178,17 +183,22 @@ fun SettingsScreen(
               )
               Text(
                 text =
-                  if (isFirebaseConfigured)
-                    (userEmail?.ifBlank { "Firestore Watchlist Sync Active" }
-                      ?: "Firestore Watchlist Sync Active")
-                  else "Cloud Sync is unavailable in this build. Streaming & downloads remain active.",
+                  when {
+                    isSignedIn ->
+                      userEmail?.ifBlank { "Cloud Watchlist Sync Active" }
+                        ?: "Cloud Watchlist Sync Active"
+                    isFirebaseConfigured ->
+                      "Local watchlist, streaming & downloads active. Sign in anytime (optional) to sync."
+                    else ->
+                      "Local watchlist, streaming & offline downloads are active on this device."
+                  },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
             }
           }
 
-          if (isFirebaseConfigured && onSignOut != null) {
+          if (isSignedIn && onSignOut != null) {
             OutlinedButton(
               onClick = onSignOut,
               shape = MaterialTheme.shapes.medium,
@@ -202,6 +212,12 @@ fun SettingsScreen(
               Spacer(modifier = Modifier.width(8.dp))
               Text("Sign Out of Google Account")
             }
+          } else if (isFirebaseConfigured) {
+            GoogleSignInButton(
+              onAuthSuccess = onAuthSuccess,
+              onAuthError = { msg -> onNotify(msg) },
+              modifier = Modifier.testTag("settings_sign_in_button"),
+            )
           }
         }
       }
