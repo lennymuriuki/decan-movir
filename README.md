@@ -8,7 +8,7 @@
 2. Open the **Actions** tab in your GitHub repository and select **Build Decan Movie APK** (it triggers automatically on every push to `main`/`master` or manually via **Run workflow**).
 3. Once the workflow finishes, download **`decan-movie-debug-apk`** from the **Artifacts** section at the bottom of the run summary, unzip it, and install `app-debug.apk` on your Android device.
 
-> **Note on Google Sign-In:** If you generate a new keystore locally or in CI, register its SHA-1/SHA-256 fingerprint in your Firebase project (`app/google-services.json`) so Google Sign-In via Credential Manager remains authorized.
+> **Note on Firebase & Google Sign-In:** Pushing from AI Studio omits `app/google-services.json` by default. The GitHub Actions workflow still compiles and produces a working APK for MovieBox discovery, streaming, and MP4/`.srt` downloads without it. To also enable Google Sign-In and Cloud Firestore watchlist sync in your GitHub-built APK, add a repository secret named **`GOOGLE_SERVICES_JSON`** containing your `app/google-services.json` (and register your keystore's SHA-1/SHA-256 in Firebase).
 
 ## Integrated APIs & Capabilities
 

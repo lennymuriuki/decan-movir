@@ -68,7 +68,18 @@ import com.example.ui.viewmodel.DiscoverViewModel
 import com.example.ui.viewmodel.LibraryUiState
 import com.example.ui.viewmodel.LibraryViewModel
 import com.example.ui.viewmodel.SearchViewModel
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.ui.Alignment
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.auth
@@ -90,6 +101,14 @@ private const val ROUTE_DETAIL = "detail/{movieId}"
 
 @Composable
 fun DecanApp() {
+  val context = LocalContext.current
+  val isFirebaseReady = remember(context) { FirebaseApp.getApps(context).isNotEmpty() }
+
+  if (!isFirebaseReady) {
+    CatalogOnlyDecanApp()
+    return
+  }
+
   var currentUser by remember { mutableStateOf(Firebase.auth.currentUser) }
 
   DisposableEffect(Unit) {
@@ -104,6 +123,227 @@ fun DecanApp() {
   } else {
     key(user.uid) {
       AuthenticatedDecanApp(user = user)
+    }
+  }
+}
+
+@Composable
+private fun CatalogOnlyDecanApp() {
+  val scope = rememberCoroutineScope()
+  val catalogRepository = remember { MovieCatalogRepository() }
+  val discoverViewModel: DiscoverViewModel =
+    viewModel(
+      key = "discover_guest",
+      factory = viewModelFactory { initializer { DiscoverViewModel(catalogRepository) } },
+    )
+  val searchViewModel: SearchViewModel =
+    viewModel(
+      key = "search_guest",
+      factory = viewModelFactory { initializer { SearchViewModel(catalogRepository) } },
+    )
+  val discoverState by discoverViewModel.uiState.collectAsStateWithLifecycle()
+  val searchState by searchViewModel.uiState.collectAsStateWithLifecycle()
+  val snackbarHostState = remember { SnackbarHostState() }
+  val navController = rememberNavController()
+  val backStackEntry by navController.currentBackStackEntryAsState()
+  val currentRoute = backStackEntry?.destination?.route
+  val showTopLevelNav = TopTab.entries.any { it.route == currentRoute }
+
+  BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+    val useNavRail = maxWidth >= 840.dp
+    Scaffold(
+      containerColor = MaterialTheme.colorScheme.background,
+      snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
+      contentWindowInsets = WindowInsets(0, 0, 0, 0),
+      bottomBar = {
+        if (showTopLevelNav && !useNavRail) {
+          NavigationBar(
+            containerColor = MaterialTheme.colorScheme.surface,
+            windowInsets = WindowInsets.navigationBars,
+          ) {
+            TopTab.entries.forEach { tab ->
+              val selected = currentRoute == tab.route
+              val label = stringResource(tab.labelRes)
+              NavigationBarItem(
+                selected = selected,
+                onClick = {
+                  navController.navigate(tab.route) {
+                    popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                    launchSingleTop = true
+                    restoreState = true
+                  }
+                },
+                icon = {
+                  Icon(
+                    imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
+                    contentDescription = label,
+                  )
+                },
+                label = { Text(label, style = MaterialTheme.typography.labelMedium) },
+                colors =
+                  NavigationBarItemDefaults.colors(
+                    selectedIconColor = MaterialTheme.colorScheme.onPrimary,
+                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                    indicatorColor = MaterialTheme.colorScheme.primary,
+                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                  ),
+                modifier = Modifier.testTag("nav_tab_${tab.route}"),
+              )
+            }
+          }
+        }
+      },
+    ) { innerPadding ->
+      Row(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+        if (showTopLevelNav && useNavRail) {
+          NavigationRail(
+            containerColor = MaterialTheme.colorScheme.surface,
+            modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
+          ) {
+            TopTab.entries.forEach { tab ->
+              val selected = currentRoute == tab.route
+              val label = stringResource(tab.labelRes)
+              NavigationRailItem(
+                selected = selected,
+                onClick = {
+                  navController.navigate(tab.route) {
+                    popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                    launchSingleTop = true
+                    restoreState = true
+                  }
+                },
+                icon = {
+                  Icon(
+                    imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
+                    contentDescription = label,
+                  )
+                },
+                label = { Text(label) },
+              )
+            }
+          }
+        }
+
+        Box(modifier = Modifier.weight(1f).fillMaxSize()) {
+          NavHost(navController = navController, startDestination = TopTab.DISCOVER.route) {
+            composable(TopTab.DISCOVER.route) {
+              DiscoverScreen(
+                uiState = discoverState,
+                savedLibraryMap = emptyMap(),
+                onRefresh = discoverViewModel::refreshCatalog,
+                onSelectMediaFilter = discoverViewModel::selectMediaFilter,
+                onSelectGenre = discoverViewModel::selectGenre,
+                onOpenMovie = { movie -> navController.navigate("detail/${movie.id}") },
+                onToggleWatchlist = {
+                  scope.launch {
+                    snackbarHostState.showSnackbar(
+                      "Cloud Watchlist requires GOOGLE_SERVICES_JSON in your build"
+                    )
+                  }
+                },
+                modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
+              )
+            }
+
+            composable(TopTab.SEARCH.route) {
+              SearchScreen(
+                uiState = searchState,
+                savedLibraryMap = emptyMap(),
+                onQueryChange = searchViewModel::onQueryChange,
+                onSubmitSearch = searchViewModel::submitSearch,
+                onSelectSuggestion = { sug -> navController.navigate("detail/mbox_${sug.subjectId}") },
+                onSelectGenre = searchViewModel::selectGenre,
+                onSelectSort = searchViewModel::selectSortOption,
+                onOpenMovie = { movie -> navController.navigate("detail/${movie.id}") },
+                onToggleWatchlist = {
+                  scope.launch {
+                    snackbarHostState.showSnackbar(
+                      "Cloud Watchlist requires GOOGLE_SERVICES_JSON in your build"
+                    )
+                  }
+                },
+                modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
+              )
+            }
+
+            composable(TopTab.LIBRARY.route) {
+              Box(
+                modifier =
+                  Modifier.fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center,
+              ) {
+                Card(
+                  colors =
+                    CardDefaults.cardColors(
+                      containerColor = MaterialTheme.colorScheme.surfaceContainer
+                    ),
+                  shape = MaterialTheme.shapes.large,
+                  modifier = Modifier.fillMaxWidth().widthIn(max = 520.dp),
+                ) {
+                  Column(
+                    modifier = Modifier.padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                  ) {
+                    Text(
+                      text = "Cloud Library Not Configured",
+                      style = MaterialTheme.typography.headlineSmall,
+                      color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                      text =
+                        "This APK was compiled without app/google-services.json. Streaming, search, and downloads work normally. To enable Google Sign-In and Firestore watchlist sync, add GOOGLE_SERVICES_JSON to your GitHub Secrets and rebuild.",
+                      style = MaterialTheme.typography.bodyMedium,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Button(
+                      onClick = {
+                        navController.navigate(TopTab.DISCOVER.route) {
+                          popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                          launchSingleTop = true
+                        }
+                      }
+                    ) {
+                      Text("Browse Movies & Series")
+                    }
+                  }
+                }
+              }
+            }
+
+            composable(
+              route = ROUTE_DETAIL,
+              arguments = listOf(navArgument("movieId") { type = NavType.StringType }),
+            ) { entry ->
+              val movieId = entry.arguments?.getString("movieId").orEmpty()
+              MovieDetailScreen(
+                movieId = movieId,
+                savedEntry = null,
+                catalogRepository = catalogRepository,
+                isSaving = false,
+                onBack = { navController.popBackStack() },
+                onSwitchSubject = { targetId ->
+                  navController.navigate("detail/$targetId") {
+                    popUpTo("detail/$movieId") { inclusive = true }
+                  }
+                },
+                onNotify = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } },
+                onSaveEntry = { _, _, _, _, _ ->
+                  scope.launch {
+                    snackbarHostState.showSnackbar(
+                      "Cloud Watchlist requires GOOGLE_SERVICES_JSON in your build"
+                    )
+                  }
+                },
+                onRemoveEntry = { _, _ -> },
+              )
+            }
+          }
+        }
+      }
     }
   }
 }
