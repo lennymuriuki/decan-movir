@@ -289,35 +289,76 @@ class MovieCatalogRepository(
     return (matching + pool.filter { it.subjectId != subjectId }).distinctBy { it.id }.take(12)
   }
 
-  suspend fun searchMovies(query: String): Pair<List<Movie>, Boolean> = coroutineScope {
+  suspend fun searchMovies(query: String): Pair<List<Movie>, Boolean> {
+    val (movies, _, offline) = searchCatalogWithSuggestions(query)
+    return movies to offline
+  }
+
+  suspend fun searchCatalogWithSuggestions(
+    query: String,
+  ): Triple<List<Movie>, List<MovieBoxSuggestion>, Boolean> = coroutineScope {
     val cleanQuery = query.trim()
     if (cleanQuery.isBlank()) {
+      if (cache.size < 10) {
+        val homeFeed = runCatching { loadHomeCatalog() }.getOrNull()
+        if (homeFeed != null && homeFeed.allMovies.isNotEmpty()) {
+          return@coroutineScope Triple(
+            homeFeed.allMovies,
+            emptyList(),
+            homeFeed.isOfflineFallback,
+          )
+        }
+      }
       val current = cache.values.toList().ifEmpty { OfflineCatalogFallback.movies }
-      return@coroutineScope current to false
+      return@coroutineScope Triple(current, emptyList(), current === OfflineCatalogFallback.movies)
     }
+
     try {
+      val directIdDeferred =
+        if (cleanQuery.length >= 10 && cleanQuery.all(Char::isDigit)) {
+          async { runCatching { getMovieBoxRichDetail(cleanQuery)?.movie }.getOrNull() }
+        } else null
+
       val mboxDeferred = async {
         runCatching { movieBox.search(cleanQuery, page = 1, perPage = 24) }
           .getOrDefault(emptyList())
       }
+      val suggestDeferred = async {
+        runCatching { movieBox.searchSuggestFull(cleanQuery) }
+          .getOrDefault(emptyList<MovieBoxSuggestion>() to emptyList())
+      }
       val itunesDeferred = async {
         runCatching {
-            api.searchMovies(term = cleanQuery, limit = 20).results.mapNotNull { it.toDomain() }
+            api.searchMovies(term = cleanQuery, limit = 25).results.mapNotNull { it.toDomain() }
           }
           .getOrDefault(emptyList())
       }
-      val live = (mboxDeferred.await() + itunesDeferred.await()).distinctBy { it.id }
-      live.forEach { cache[it.id] = it }
-      if (live.isNotEmpty()) {
-        live to false
+
+      val directMovie = directIdDeferred?.await()
+      val mboxHits = mboxDeferred.await()
+      val (suggestions, suggestMovies) = suggestDeferred.await()
+      val itunesHits = itunesDeferred.await()
+
+      val liveCombined =
+        (listOfNotNull(directMovie) + mboxHits + suggestMovies + itunesHits).distinctBy { it.id }
+      liveCombined.forEach { cache[it.id] = it }
+
+      if (liveCombined.isNotEmpty()) {
+        val cacheExtras =
+          cache.values.filter { cached ->
+            liveCombined.none { it.id == cached.id } && matchesQueryTokens(cleanQuery, cached)
+          }
+        val ranked = rankSearchResults(cleanQuery, (liveCombined + cacheExtras).distinctBy { it.id })
+        Triple(ranked, suggestions, false)
       } else {
-        val localMatches = searchLocalCache(cleanQuery)
-        localMatches to false
+        val localMatches = rankSearchResults(cleanQuery, searchLocalCache(cleanQuery))
+        Triple(localMatches, suggestions, false)
       }
     } catch (e: CancellationException) {
       throw e
     } catch (_: Exception) {
-      searchLocalCache(cleanQuery) to true
+      val localMatches = rankSearchResults(cleanQuery, searchLocalCache(cleanQuery))
+      Triple(localMatches, emptyList(), true)
     }
   }
 
@@ -433,12 +474,43 @@ class MovieCatalogRepository(
   private fun searchLocalCache(cleanQuery: String): List<Movie> =
     (cache.values.toList() + OfflineCatalogFallback.movies)
       .distinctBy { it.id }
-      .filter {
-        it.title.contains(cleanQuery, ignoreCase = true) ||
-          it.director.contains(cleanQuery, ignoreCase = true) ||
-          it.genre.contains(cleanQuery, ignoreCase = true) ||
-          it.mediaType.contains(cleanQuery, ignoreCase = true)
-      }
+      .filter { matchesQueryTokens(cleanQuery, it) }
+
+  private fun matchesQueryTokens(cleanQuery: String, movie: Movie): Boolean {
+    if (
+      movie.title.contains(cleanQuery, ignoreCase = true) ||
+        movie.director.contains(cleanQuery, ignoreCase = true) ||
+        movie.genre.contains(cleanQuery, ignoreCase = true) ||
+        movie.mediaType.contains(cleanQuery, ignoreCase = true)
+    ) {
+      return true
+    }
+    val tokens = cleanQuery.split(Regex("\\s+")).filter { it.length >= 2 }
+    if (tokens.size <= 1) return false
+    val haystack = "${movie.title} ${movie.director} ${movie.genre} ${movie.mediaType}"
+    return tokens.all { haystack.contains(it, ignoreCase = true) }
+  }
+
+  internal fun rankSearchResults(query: String, movies: List<Movie>): List<Movie> {
+    val q = query.trim().lowercase()
+    if (q.isBlank()) return movies
+    val tokens = q.split(Regex("\\s+")).filter { it.isNotBlank() }
+    return movies.sortedByDescending { movie ->
+      val titleLower = movie.title.trim().lowercase()
+      val baseScore =
+        when {
+          titleLower == q -> 10_000
+          titleLower.startsWith(q) -> 7_500
+          titleLower.contains(q) -> 5_000
+          tokens.isNotEmpty() && tokens.all { titleLower.contains(it) } -> 3_500
+          tokens.any { titleLower.contains(it) } -> 1_500
+          else -> 200
+        }
+      val streamBonus = if (movie.subjectId.isNotBlank()) 500 else 0
+      val posterBonus = if (movie.posterUrl.isNotBlank()) 50 else 0
+      baseScore + streamBonus + posterBonus
+    }
+  }
 
   private fun buildOfflineRails(movies: List<Movie>): List<MovieRail> =
     listOf(

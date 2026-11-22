@@ -339,65 +339,170 @@ class MovieBoxEngine(
       }
     }
 
-  suspend fun search(query: String, page: Int = 1, perPage: Int = 20): List<Movie> {
+  suspend fun search(query: String, page: Int = 1, perPage: Int = 24): List<Movie> = coroutineScope {
+    val cleanQuery = query.trim()
+    if (cleanQuery.isBlank()) return@coroutineScope emptyList()
+
+    val webDeferred = async {
+      runCatching { searchWeb(cleanQuery, page, perPage) }.getOrElse { err ->
+        if (err is CancellationException) throw err
+        emptyList()
+      }
+    }
+    val mobileDeferred = async {
+      runCatching { searchMobile(cleanQuery, page, perPage) }.getOrElse { err ->
+        if (err is CancellationException) throw err
+        emptyList()
+      }
+    }
+
+    (webDeferred.await() + mobileDeferred.await()).distinctBy { it.id }
+  }
+
+  private suspend fun searchWeb(query: String, page: Int, perPage: Int): List<Movie> =
+    withContext(Dispatchers.IO) {
+      val payload =
+        JSONObject().apply {
+          put("keyword", query)
+          put("page", page)
+          put("perPage", perPage)
+          put("subjectType", 0)
+        }
+      val endpoints =
+        listOf(
+          "$API_BASE/subject/search",
+          "https://moviebox.ph/wefeed-h5api-bff/subject/search",
+        )
+      for (url in endpoints) {
+        val parsed =
+          runCatching {
+            val req =
+              Request.Builder()
+                .url(url)
+                .post(
+                  payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+                )
+                .addHeader("User-Agent", MovieBoxCrypto.WEB_USER_AGENT)
+                .addHeader("Referer", "https://moviebox.ph/")
+                .addHeader("Origin", "https://moviebox.ph")
+                .addHeader("Accept", "application/json")
+                .addHeader("x-client-info", """{"timezone":"UTC"}""")
+                .addHeader("x-request-lang", "en")
+                .addHeader("x-source", "moviebox")
+                .build()
+            client.newCall(req).execute().use { resp ->
+              if (!resp.isSuccessful) emptyList()
+              else parseSearchResultsJson(JSONObject(resp.body?.string().orEmpty()))
+            }
+          }.getOrDefault(emptyList())
+        if (parsed.isNotEmpty()) return@withContext parsed
+      }
+      emptyList()
+    }
+
+  private suspend fun searchMobile(query: String, page: Int, perPage: Int): List<Movie> {
     val payload =
       JSONObject().apply {
         put("keyword", query)
         put("page", page)
         put("perPage", perPage)
+        put("subjectType", 0)
       }
-    val data =
-      apiRequest("POST", "/wefeed-mobile-bff/subject-api/search", bodyJson = payload)
-        .optJSONObject("data") ?: JSONObject()
-    val raw = data.optJSONArray("items") ?: data.optJSONArray("list") ?: JSONArray()
+    val root = apiRequest("POST", "/wefeed-mobile-bff/subject-api/search", bodyJson = payload)
+    return parseSearchResultsJson(root)
+  }
+
+  internal fun parseSearchResultsJson(root: JSONObject): List<Movie> {
+    val data = root.optJSONObject("data") ?: root
+    val raw =
+      data.optJSONArray("items")
+        ?: data.optJSONArray("subjects")
+        ?: data.optJSONArray("list")
+        ?: data.optJSONArray("results")
+        ?: data.optJSONObject("pager")?.optJSONArray("items")
+        ?: JSONArray()
     val results = mutableListOf<Movie>()
     for (i in 0 until raw.length()) {
       val item = raw.optJSONObject(i) ?: continue
       val sub = item.optJSONObject("subject") ?: item
       parseSubjectToMovie(sub)?.let { results.add(it) }
     }
-    return results
+    return results.distinctBy { it.id }
   }
 
   suspend fun searchSuggest(query: String): List<MovieBoxSuggestion> =
+    searchSuggestFull(query).first
+
+  suspend fun searchSuggestFull(query: String): Pair<List<MovieBoxSuggestion>, List<Movie>> =
     withContext(Dispatchers.IO) {
-      val url = "$API_BASE/subject/search-suggest"
+      val cleanQuery = query.trim()
+      if (cleanQuery.isBlank()) return@withContext emptyList<MovieBoxSuggestion>() to emptyList()
+
       val payload =
         JSONObject().apply {
-          put("keyword", query)
-          put("perPage", 10)
+          put("keyword", cleanQuery)
+          put("perPage", 12)
         }
-      val req =
-        Request.Builder()
-          .url(url)
-          .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
-          .addHeader("User-Agent", MovieBoxCrypto.WEB_USER_AGENT)
-          .addHeader("Referer", "https://moviebox.ph/")
-          .build()
-      val root =
-        client.newCall(req).execute().use { resp ->
-          if (!resp.isSuccessful) return@withContext emptyList()
-          JSONObject(resp.body?.string().orEmpty())
-        }
-      val raw = root.optJSONObject("data")?.optJSONArray("items") ?: JSONArray()
-      val suggestions = mutableListOf<MovieBoxSuggestion>()
-      for (i in 0 until raw.length()) {
-        val item = raw.optJSONObject(i) ?: continue
-        val sub = item.optJSONObject("subject") ?: JSONObject()
-        val title =
-          sub.optString("title").ifBlank {
-            item.optString("word").ifBlank { item.optString("title") }
-          }
-        val sid =
-          sub.optString("subjectId").ifBlank { item.optString("subjectId") }
-        val slug =
-          sub.optString("detailPath").ifBlank { item.optString("detailPath") }
-        if (title.isNotBlank() && sid.isNotBlank()) {
-          suggestions.add(MovieBoxSuggestion(title = title, slug = slug, subjectId = sid))
+      val endpoints =
+        listOf(
+          "$API_BASE/subject/search-suggest",
+          "https://moviebox.ph/wefeed-h5api-bff/subject/search-suggest",
+        )
+      for (url in endpoints) {
+        val parsed =
+          runCatching {
+            val req =
+              Request.Builder()
+                .url(url)
+                .post(
+                  payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+                )
+                .addHeader("User-Agent", MovieBoxCrypto.WEB_USER_AGENT)
+                .addHeader("Referer", "https://moviebox.ph/")
+                .addHeader("Origin", "https://moviebox.ph")
+                .addHeader("Accept", "application/json")
+                .addHeader("x-request-lang", "en")
+                .addHeader("x-source", "moviebox")
+                .build()
+            client.newCall(req).execute().use { resp ->
+              if (!resp.isSuccessful) emptyList<MovieBoxSuggestion>() to emptyList()
+              else parseSearchSuggestPayload(JSONObject(resp.body?.string().orEmpty()))
+            }
+          }.getOrNull()
+        if (parsed != null && (parsed.first.isNotEmpty() || parsed.second.isNotEmpty())) {
+          return@withContext parsed
         }
       }
-      suggestions
+      emptyList<MovieBoxSuggestion>() to emptyList()
     }
+
+  internal fun parseSearchSuggestPayload(
+    root: JSONObject,
+  ): Pair<List<MovieBoxSuggestion>, List<Movie>> {
+    val data = root.optJSONObject("data") ?: root
+    val raw =
+      data.optJSONArray("items")
+        ?: data.optJSONArray("suggestions")
+        ?: data.optJSONArray("list")
+        ?: JSONArray()
+    val suggestions = mutableListOf<MovieBoxSuggestion>()
+    val movies = mutableListOf<Movie>()
+    for (i in 0 until raw.length()) {
+      val item = raw.optJSONObject(i) ?: continue
+      val sub = item.optJSONObject("subject") ?: item
+      val title =
+        sub.optString("title").ifBlank {
+          item.optString("word").ifBlank { item.optString("title") }
+        }
+      val sid = sub.optString("subjectId").ifBlank { item.optString("subjectId") }
+      val slug = sub.optString("detailPath").ifBlank { item.optString("detailPath") }
+      if (title.isNotBlank() && sid.isNotBlank()) {
+        suggestions.add(MovieBoxSuggestion(title = title, slug = slug, subjectId = sid))
+      }
+      parseSubjectToMovie(sub)?.let { movies.add(it) }
+    }
+    return suggestions.distinctBy { it.subjectId } to movies.distinctBy { it.id }
+  }
 
   suspend fun getDetails(subjectId: String): MovieBoxRichDetail {
     val data =

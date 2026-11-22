@@ -420,13 +420,6 @@ fun PlayerRecommendationPosterCard(
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
-        Text(
-          text = movie.synopsis.ifBlank { "Tap to stream in HD on Decan Theater." },
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          maxLines = 3,
-          overflow = TextOverflow.Ellipsis,
-        )
       }
     }
   }

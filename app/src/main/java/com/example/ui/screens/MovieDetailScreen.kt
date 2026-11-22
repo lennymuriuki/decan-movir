@@ -32,9 +32,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.BookmarkAdded
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadForOffline
 import androidx.compose.material.icons.filled.Favorite
@@ -52,16 +52,15 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -78,6 +77,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.download.StreamDownloadManager
 import com.example.data.model.Movie
@@ -89,10 +89,10 @@ import com.example.data.remote.moviebox.MovieBoxSeason
 import com.example.data.remote.moviebox.MovieBoxStream
 import com.example.data.remote.moviebox.MovieBoxSubtitle
 import com.example.ui.components.BatchDownloadSheet
+import com.example.ui.components.EpisodeNumberGrid
 import com.example.ui.components.MetadataChip
 import com.example.ui.components.MoviePosterCard
 import com.example.ui.components.MoviePosterImage
-import com.example.ui.components.StarRatingBar
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 
@@ -204,18 +204,10 @@ fun MovieDetailScreen(
     return
   }
 
-  var watchStatus by remember(savedEntry?.watchStatus, movieId) {
-    mutableStateOf(savedEntry?.watchStatusEnum() ?: WatchStatus.WANT_TO_WATCH)
-  }
   var favorite by remember(savedEntry?.favorite, movieId) {
     mutableStateOf(savedEntry?.favorite ?: false)
   }
-  var personalRating by remember(savedEntry?.personalRating, movieId) {
-    mutableIntStateOf(savedEntry?.personalRating?.toInt() ?: 0)
-  }
-  var personalNote by remember(savedEntry?.personalNote, movieId) {
-    mutableStateOf(savedEntry?.personalNote.orEmpty())
-  }
+  var synopsisExpanded by remember(movieId) { mutableStateOf(false) }
 
   Column(
     modifier =
@@ -293,10 +285,35 @@ fun MovieDetailScreen(
           }
 
           FilledTonalIconButton(
+            onClick = { onToggleQuickWatchlist(activeMovie) },
+            colors =
+              IconButtonDefaults.filledTonalIconButtonColors(
+                containerColor =
+                  if (savedEntry != null) MaterialTheme.colorScheme.primary
+                  else Color.Black.copy(alpha = 0.6f),
+                contentColor =
+                  if (savedEntry != null) MaterialTheme.colorScheme.onPrimary else Color.White,
+              ),
+            modifier = Modifier.testTag("detail_watchlist_button"),
+          ) {
+            Icon(
+              imageVector =
+                if (savedEntry != null) Icons.Filled.Bookmark else Icons.Filled.BookmarkAdd,
+              contentDescription = if (savedEntry != null) "Saved in watchlist" else "Save to watchlist",
+            )
+          }
+
+          FilledTonalIconButton(
             onClick = {
               val nextFav = !favorite
               favorite = nextFav
-              onSaveEntry(activeMovie, watchStatus, nextFav, personalRating, personalNote)
+              onSaveEntry(
+                activeMovie,
+                savedEntry?.watchStatusEnum() ?: WatchStatus.WANT_TO_WATCH,
+                nextFav,
+                savedEntry?.personalRating?.toInt() ?: 0,
+                savedEntry?.personalNote.orEmpty(),
+              )
             },
             colors =
               IconButtonDefaults.filledTonalIconButtonColors(
@@ -444,86 +461,33 @@ fun MovieDetailScreen(
       }
 
       if (seasons.isNotEmpty()) {
-        val currentSeasonObj =
-          seasons.firstOrNull { it.season == selectedSeason } ?: seasons.first()
-        Card(
-          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-          shape = MaterialTheme.shapes.large,
-          modifier = Modifier.fillMaxWidth(),
-        ) {
-          Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-          ) {
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween,
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              Text(
-                text = "Seasons & Episodes",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-              )
-              Text(
-                text = "${currentSeasonObj.episodeCount} eps",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary,
+        EpisodeNumberGrid(
+          seasons = seasons,
+          selectedSeason = selectedSeason,
+          selectedEpisode = selectedEpisode,
+          onSelectSeason = { seasonNum ->
+            selectedSeason = seasonNum
+            selectedEpisode = 1
+            scope.launch {
+              loadStreamsAndSubs(
+                activeMovie.subjectId,
+                seasonNum,
+                1,
+                activeMovie.detailPath,
               )
             }
-
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-              items(seasons, key = { it.season }) { seasonObj ->
-                FilterChip(
-                  selected = seasonObj.season == selectedSeason,
-                  onClick = {
-                    selectedSeason = seasonObj.season
-                    selectedEpisode = 1
-                    scope.launch {
-                      loadStreamsAndSubs(
-                        activeMovie.subjectId,
-                        seasonObj.season,
-                        1,
-                        activeMovie.detailPath,
-                      )
-                    }
-                  },
-                  label = { Text("Season ${seasonObj.season}") },
-                  colors =
-                    FilterChipDefaults.filterChipColors(
-                      selectedContainerColor = MaterialTheme.colorScheme.primary,
-                      selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
-                    ),
-                )
-              }
-            }
-
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-              items((1..currentSeasonObj.episodeCount).toList(), key = { it }) { epNum ->
-                FilterChip(
-                  selected = epNum == selectedEpisode,
-                  onClick = {
-                    selectedEpisode = epNum
-                    scope.launch {
-                      loadStreamsAndSubs(
-                        activeMovie.subjectId,
-                        selectedSeason,
-                        epNum,
-                        activeMovie.detailPath,
-                      )
-                    }
-                  },
-                  label = { Text("Ep $epNum") },
-                  colors =
-                    FilterChipDefaults.filterChipColors(
-                      selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
-                      selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                    ),
-                )
-              }
-            }
-          }
-        }
+          },
+          onSelectEpisode = { seasonNum, epNum ->
+            selectedSeason = seasonNum
+            selectedEpisode = epNum
+            onOpenPlayer(activeMovie, seasonNum, epNum)
+          },
+          actionLabel = if (activeMovie.subjectId.isNotBlank()) "Batch DL" else null,
+          onActionClick =
+            if (activeMovie.subjectId.isNotBlank()) {
+              { showBatchSheet = true }
+            } else null,
+        )
       }
 
       if (activeMovie.subjectId.isNotBlank()) {
@@ -703,114 +667,26 @@ fun MovieDetailScreen(
         }
       }
 
-      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-          text = "Synopsis",
-          style = MaterialTheme.typography.headlineSmall,
-          color = MaterialTheme.colorScheme.onBackground,
-        )
-        Text(
-          text = activeMovie.synopsis,
-          style = MaterialTheme.typography.bodyLarge,
-          color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.88f),
-        )
-      }
-
-      Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-        shape = MaterialTheme.shapes.large,
-        modifier = Modifier.fillMaxWidth(),
-      ) {
-        Column(
-          modifier = Modifier.padding(18.dp),
-          verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
+      if (activeMovie.synopsis.isNotBlank()) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
           Text(
-            text = "My Screening Log",
-            style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onSurface,
+            text = "Overview",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onBackground,
           )
-
-          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            WatchStatus.entries.forEach { status ->
-              FilterChip(
-                selected = watchStatus == status,
-                onClick = { watchStatus = status },
-                label = { Text(status.label, style = MaterialTheme.typography.labelLarge) },
-                colors =
-                  FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primary,
-                    selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
-                  ),
-                modifier = Modifier.testTag("status_chip_${status.name}"),
-              )
-            }
-          }
-
-          Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-              text = "Your Rating",
-              style = MaterialTheme.typography.titleSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            StarRatingBar(
-              rating = personalRating,
-              onRatingChanged = { personalRating = it },
-            )
-          }
-
-          OutlinedTextField(
-            value = personalNote,
-            onValueChange = { if (it.length <= 1000) personalNote = it },
-            label = { Text("Personal review or viewing note") },
-            placeholder = { Text("What stood out about the score, pacing, or ending?") },
-            minLines = 3,
-            maxLines = 5,
-            shape = MaterialTheme.shapes.medium,
-            modifier = Modifier.fillMaxWidth().testTag("review_note_input"),
+          Text(
+            text = activeMovie.synopsis,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+            maxLines = if (synopsisExpanded) Int.MAX_VALUE else 3,
+            overflow = TextOverflow.Ellipsis,
           )
-
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
-            Button(
-              onClick = {
-                onSaveEntry(activeMovie, watchStatus, favorite, personalRating, personalNote)
-              },
-              enabled = !isSaving,
-              shape = MaterialTheme.shapes.large,
-              modifier = Modifier.weight(1f).height(50.dp).testTag("save_library_button"),
+          if (activeMovie.synopsis.length > 140) {
+            TextButton(
+              onClick = { synopsisExpanded = !synopsisExpanded },
+              contentPadding = PaddingValues(0.dp),
             ) {
-              if (isSaving) {
-                CircularProgressIndicator(
-                  color = MaterialTheme.colorScheme.onPrimary,
-                  modifier = Modifier.size(20.dp),
-                  strokeWidth = 2.dp,
-                )
-              } else {
-                Icon(
-                  imageVector = Icons.Filled.BookmarkAdded,
-                  contentDescription = null,
-                  modifier = Modifier.size(18.dp),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(if (savedEntry != null) "Update Library" else "Save to Library")
-              }
-            }
-
-            if (savedEntry != null) {
-              OutlinedButton(
-                onClick = { onRemoveEntry(activeMovie.id, activeMovie.title) },
-                enabled = !isSaving,
-                shape = MaterialTheme.shapes.large,
-                modifier = Modifier.height(50.dp).testTag("remove_library_button"),
-              ) {
-                Icon(
-                  imageVector = Icons.Filled.DeleteOutline,
-                  contentDescription = "Remove from library",
-                )
-              }
+              Text(if (synopsisExpanded) "Show less" else "Read more")
             }
           }
         }

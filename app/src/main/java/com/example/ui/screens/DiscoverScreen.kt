@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.LocalMovies
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.TrendingUp
@@ -93,6 +94,7 @@ fun DiscoverScreen(
   onOpenNotifications: () -> Unit,
   onOpenSettings: () -> Unit,
   modifier: Modifier = Modifier,
+  onOpenSearch: () -> Unit = {},
 ) {
   if (uiState.isLoading && uiState.allMovies.isEmpty()) {
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -254,6 +256,39 @@ fun DiscoverScreen(
               )
             }
           }
+        }
+      }
+    }
+
+    item {
+      Surface(
+        onClick = onOpenSearch,
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.large,
+        modifier =
+          Modifier.fillMaxWidth()
+            .padding(horizontal = 20.dp)
+            .height(48.dp)
+            .testTag("discover_search_button"),
+      ) {
+        Row(
+          modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Filled.Search,
+            contentDescription = "Search catalog",
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp),
+          )
+          Text(
+            text = stringResource(R.string.search_placeholder),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
         }
       }
     }

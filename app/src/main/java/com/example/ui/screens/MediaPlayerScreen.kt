@@ -13,7 +13,6 @@ import android.view.SurfaceView
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -44,18 +43,14 @@ import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Hd
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -75,7 +70,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
@@ -94,6 +88,7 @@ import com.example.data.remote.moviebox.SubtitleCue
 import com.example.data.settings.AppSettings
 import com.example.data.settings.PlaybackProgressStore
 import com.example.ui.components.BatchDownloadSheet
+import com.example.ui.components.EpisodeNumberGrid
 import com.example.ui.components.MoviePosterImage
 import com.example.ui.components.PlayerControlsOverlay
 import com.example.ui.components.PlayerGestureLayer
@@ -947,16 +942,23 @@ fun MediaPlayerScreen(
                 }
               }
             }
+          }
+        }
 
-            if (!currentMovie?.synopsis.isNullOrBlank()) {
-              Text(
-                text = currentMovie?.synopsis.orEmpty(),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-              )
-            }
+        if (seasons.isNotEmpty()) {
+          item {
+            EpisodeNumberGrid(
+              seasons = seasons,
+              selectedSeason = selectedSeason,
+              selectedEpisode = selectedEpisode,
+              onSelectSeason = { seasonNum -> switchToEpisode(seasonNum, 1) },
+              onSelectEpisode = { seasonNum, epNum -> switchToEpisode(seasonNum, epNum) },
+              actionLabel = if (localPlayUri.isNullOrBlank()) "Multi-Download" else null,
+              onActionClick =
+                if (localPlayUri.isNullOrBlank()) {
+                  { showBatchDownloadSheet = true }
+                } else null,
+            )
           }
         }
 
@@ -981,75 +983,6 @@ fun MediaPlayerScreen(
           }
         }
 
-        if (seasons.isNotEmpty()) {
-          item {
-            val activeSeasonObj =
-              seasons.firstOrNull { it.season == selectedSeason } ?: seasons.first()
-            Card(
-              colors =
-                CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-              shape = MaterialTheme.shapes.large,
-            ) {
-              Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-              ) {
-                Row(
-                  modifier = Modifier.fillMaxWidth(),
-                  horizontalArrangement = Arrangement.SpaceBetween,
-                  verticalAlignment = Alignment.CenterVertically,
-                ) {
-                  Text(
-                    text = "Episodes • Season ${activeSeasonObj.season}",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                  )
-                  TextButton(onClick = { showBatchDownloadSheet = true }) {
-                    Text("Multi-Download")
-                  }
-                }
-
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                  items(seasons, key = { it.season }) { seasonObj ->
-                    FilterChip(
-                      selected = seasonObj.season == selectedSeason,
-                      onClick = { switchToEpisode(seasonObj.season, 1) },
-                      label = { Text("S${seasonObj.season}") },
-                      colors =
-                        FilterChipDefaults.filterChipColors(
-                          selectedContainerColor = MaterialTheme.colorScheme.primary,
-                          selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
-                        ),
-                    )
-                  }
-                }
-
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                  items((1..activeSeasonObj.episodeCount).toList(), key = { it }) { ep ->
-                    val current = ep == selectedEpisode
-                    Surface(
-                      color =
-                        if (current) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.surfaceContainerHigh,
-                      shape = MaterialTheme.shapes.small,
-                      modifier = Modifier.clickable { switchToEpisode(selectedSeason, ep) },
-                    ) {
-                      Text(
-                        text = if (current) "▶ Ep $ep" else "Ep $ep",
-                        style = MaterialTheme.typography.labelLarge,
-                        color =
-                          if (current) MaterialTheme.colorScheme.onPrimary
-                          else MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                      )
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-
         if (recommendations.isNotEmpty()) {
           item {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -1059,7 +992,7 @@ fun MediaPlayerScreen(
                 color = MaterialTheme.colorScheme.onBackground,
               )
               Text(
-                text = "Poster picks with synopsis — tap any card to play",
+                text = "Tap any poster to play next",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )

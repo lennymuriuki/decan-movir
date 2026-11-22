@@ -639,6 +639,7 @@ private fun DecanMainShell(
                 onOpenDownloads = { navigateTopTab(TopTab.DOWNLOADS) },
                 onOpenNotifications = { showNotificationSheet = true },
                 onOpenSettings = { navigateTopTab(TopTab.SETTINGS) },
+                onOpenSearch = { navigateTopTab(TopTab.SEARCH) },
                 modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
               )
             }
@@ -649,6 +650,7 @@ private fun DecanMainShell(
                 savedLibraryMap = savedLibraryMap,
                 onQueryChange = searchViewModel::onQueryChange,
                 onSubmitSearch = searchViewModel::submitSearch,
+                onSubmitKeyword = searchViewModel::submitKeyword,
                 onSelectSuggestion = { sug ->
                   navController.navigate(buildDetailRoute("mbox_${sug.subjectId}"))
                 },

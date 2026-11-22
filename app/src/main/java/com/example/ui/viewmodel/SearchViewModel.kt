@@ -7,7 +7,6 @@ import com.example.data.remote.MovieCatalogRepository
 import com.example.data.remote.moviebox.MovieBoxSuggestion
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -54,7 +53,13 @@ class SearchViewModel(
   }
 
   fun onQueryChange(newQuery: String) {
-    _uiState.update { it.copy(query = newQuery) }
+    _uiState.update {
+      it.copy(
+        query = newQuery,
+        selectedGenre = "All",
+        suggestions = if (newQuery.trim().length < 2) emptyList() else it.suggestions,
+      )
+    }
     searchJob?.cancel()
     searchJob =
       viewModelScope.launch {
@@ -65,7 +70,20 @@ class SearchViewModel(
 
   fun submitSearch() {
     searchJob?.cancel()
-    searchJob = viewModelScope.launch { executeSearch(_uiState.value.query) }
+    val currentQuery = _uiState.value.query
+    _uiState.update { it.copy(selectedGenre = "All") }
+    searchJob = viewModelScope.launch { executeSearch(currentQuery) }
+  }
+
+  fun submitKeyword(keyword: String) {
+    searchJob?.cancel()
+    _uiState.update {
+      it.copy(
+        query = keyword,
+        selectedGenre = "All",
+      )
+    }
+    searchJob = viewModelScope.launch { executeSearch(keyword) }
   }
 
   fun selectGenre(genre: String) {
@@ -76,17 +94,14 @@ class SearchViewModel(
     _uiState.update { it.copy(sortOption = option) }
   }
 
-  private suspend fun executeSearch(query: String) = coroutineScope {
+  private suspend fun executeSearch(query: String) {
     _uiState.update { it.copy(isLoading = true) }
-    val searchDeferred = async { catalogRepository.searchMovies(query) }
-    val suggestDeferred = async { catalogRepository.searchSuggestions(query) }
-    val (movies, offline) = searchDeferred.await()
-    val suggestions = suggestDeferred.await()
+    val (movies, suggestions, offline) = catalogRepository.searchCatalogWithSuggestions(query)
     _uiState.update {
       it.copy(
         isLoading = false,
         results = movies,
-        suggestions = suggestions,
+        suggestions = if (query.trim().length >= 2) suggestions else emptyList(),
         isOfflineFallback = offline,
       )
     }

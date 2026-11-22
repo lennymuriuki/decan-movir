@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
@@ -23,12 +24,16 @@ import androidx.compose.material.icons.filled.MovieFilter
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -36,6 +41,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
@@ -60,7 +67,20 @@ fun SearchScreen(
   onOpenMovie: (Movie) -> Unit,
   onToggleWatchlist: (Movie) -> Unit,
   modifier: Modifier = Modifier,
+  onSubmitKeyword: (String) -> Unit = {
+    onQueryChange(it)
+    onSubmitSearch()
+  },
 ) {
+  val keyboardController = LocalSoftwareKeyboardController.current
+  val focusManager = LocalFocusManager.current
+
+  fun triggerSearch() {
+    keyboardController?.hide()
+    focusManager.clearFocus()
+    onSubmitSearch()
+  }
+
   val genres =
     remember(uiState.results) {
       listOf("All") +
@@ -92,40 +112,67 @@ fun SearchScreen(
         color = MaterialTheme.colorScheme.onBackground,
       )
 
-      OutlinedTextField(
-        value = uiState.query,
-        onValueChange = onQueryChange,
-        placeholder = { Text(stringResource(R.string.search_placeholder)) },
-        leadingIcon = {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        OutlinedTextField(
+          value = uiState.query,
+          onValueChange = onQueryChange,
+          placeholder = { Text(stringResource(R.string.search_placeholder)) },
+          leadingIcon = {
+            IconButton(
+              onClick = { triggerSearch() },
+              modifier = Modifier.testTag("search_leading_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Filled.Search,
+                contentDescription = "Search",
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            }
+          },
+          trailingIcon = {
+            if (uiState.query.isNotEmpty()) {
+              IconButton(
+                onClick = { onQueryChange("") },
+                modifier = Modifier.testTag("search_clear_button"),
+              ) {
+                Icon(imageVector = Icons.Filled.Close, contentDescription = "Clear search")
+              }
+            }
+          },
+          singleLine = true,
+          shape = MaterialTheme.shapes.large,
+          keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+          keyboardActions = KeyboardActions(onSearch = { triggerSearch() }),
+          colors =
+            OutlinedTextFieldDefaults.colors(
+              focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+              unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+              focusedBorderColor = MaterialTheme.colorScheme.primary,
+              unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+            ),
+          modifier = Modifier.weight(1f).testTag("movie_search_input"),
+        )
+
+        FilledIconButton(
+          onClick = { triggerSearch() },
+          colors =
+            IconButtonDefaults.filledIconButtonColors(
+              containerColor = MaterialTheme.colorScheme.primary,
+              contentColor = MaterialTheme.colorScheme.onPrimary,
+            ),
+          shape = MaterialTheme.shapes.large,
+          modifier = Modifier.size(54.dp).testTag("search_submit_button"),
+        ) {
           Icon(
             imageVector = Icons.Filled.Search,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
+            contentDescription = "Search catalog",
           )
-        },
-        trailingIcon = {
-          if (uiState.query.isNotEmpty()) {
-            IconButton(
-              onClick = { onQueryChange("") },
-              modifier = Modifier.testTag("search_clear_button"),
-            ) {
-              Icon(imageVector = Icons.Filled.Close, contentDescription = "Clear search")
-            }
-          }
-        },
-        singleLine = true,
-        shape = MaterialTheme.shapes.large,
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-        keyboardActions = KeyboardActions(onSearch = { onSubmitSearch() }),
-        colors =
-          OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-            focusedBorderColor = MaterialTheme.colorScheme.primary,
-            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
-          ),
-        modifier = Modifier.fillMaxWidth().testTag("movie_search_input"),
-      )
+        }
+      }
 
       if (uiState.suggestions.isNotEmpty() && uiState.query.isNotBlank()) {
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -150,8 +197,9 @@ fun SearchScreen(
           items(uiState.trendingKeywords, key = { it }) { keyword ->
             AssistChip(
               onClick = {
-                onQueryChange(keyword)
-                onSubmitSearch()
+                keyboardController?.hide()
+                focusManager.clearFocus()
+                onSubmitKeyword(keyword)
               },
               leadingIcon = {
                 Icon(
@@ -230,10 +278,25 @@ fun SearchScreen(
               color = MaterialTheme.colorScheme.onBackground,
             )
             Text(
-              text = "Try searching another title, filmmaker, or reset the genre filter.",
+              text = "Try another title or tap Search again to query live releases.",
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+              Button(
+                onClick = { triggerSearch() },
+                modifier = Modifier.height(48.dp),
+              ) { Text("Search Again") }
+              if (uiState.query.isNotBlank() || uiState.selectedGenre != "All") {
+                OutlinedButton(
+                  onClick = {
+                    onSelectGenre("All")
+                    onQueryChange("")
+                  },
+                  modifier = Modifier.height(48.dp),
+                ) { Text("Reset") }
+              }
+            }
           }
         }
       }
