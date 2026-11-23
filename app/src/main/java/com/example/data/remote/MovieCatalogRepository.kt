@@ -73,7 +73,7 @@ class MovieCatalogRepository(
         parseSnapshotMovies(obj.optJSONArray("rankings"))
           .filter(::isValidCinemaEntry)
           .mapIndexed { idx, m -> m.copy(rankPosition = idx + 1) }
-      val anime = parseSnapshotMovies(obj.optJSONArray("anime")).filter(::isValidCinemaEntry)
+      val anime = parseSnapshotMovies(obj.optJSONArray("anime")).filter(::isGenuineAnime)
       val recommendations =
         parseSnapshotMovies(obj.optJSONArray("recommendations")).filter(::isValidCinemaEntry)
       val rails = parseSnapshotRails(obj.optJSONArray("rails"))
@@ -132,6 +132,13 @@ class MovieCatalogRepository(
           runCatching { movieBox.getAnime(page = 1, perPage = 24) }.getOrDefault(emptyList())
         }.orEmpty()
       }
+      val jikanAnimeDeferred = async {
+        withTimeoutOrNull(4500L) {
+          runCatching {
+            jikanTvMaze.browseAnime("All", AnimeSortMode.TOP_RANKED, page = 1, limit = 18)
+          }.getOrDefault(emptyList())
+        }.orEmpty()
+      }
       val mboxTrendingDeferred = async {
         withTimeoutOrNull(4000L) {
           runCatching { movieBox.getTrendingKeywords() }.getOrDefault(emptyList())
@@ -157,7 +164,8 @@ class MovieCatalogRepository(
       val mboxRankings = mboxRankingsDeferred.await().filter(::isValidCinemaEntry)
       val mboxMovies = mboxMoviesDeferred.await().filter(::isValidCinemaEntry)
       val mboxSeries = mboxSeriesDeferred.await().filter(::isValidCinemaEntry)
-      val mboxAnime = mboxAnimeDeferred.await().filter(::isValidCinemaEntry)
+      val mboxAnime = mboxAnimeDeferred.await().filter(::isGenuineAnime)
+      val jikanAnime = jikanAnimeDeferred.await().filter(::isGenuineAnime)
       val trendingKeywords = mboxTrendingDeferred.await()
       val topItunes = topItunesDeferred.await().filter(::isValidCinemaEntry)
       val sciFiItunes = sciFiItunesDeferred.await().filter(::isValidCinemaEntry)
@@ -170,6 +178,15 @@ class MovieCatalogRepository(
           if (cleanMovies.isEmpty()) null else rail.copy(movies = cleanMovies)
         }
 
+      val mboxAnimeByTitle = mboxAnime.associateBy { normalizeTitleKey(it.title) }
+      val enrichedHomeAnime =
+        jikanAnime.map { anime ->
+          val streamMatch = mboxAnimeByTitle[normalizeTitleKey(anime.title)]
+          if (streamMatch != null) {
+            anime.copy(subjectId = streamMatch.subjectId, detailPath = streamMatch.detailPath)
+          } else anime
+        }
+
       val combined =
         (homeSpotlight +
             mboxRankings +
@@ -177,6 +194,7 @@ class MovieCatalogRepository(
             mboxMovies +
             mboxSeries +
             mboxAnime +
+            enrichedHomeAnime +
             topItunes +
             sciFiItunes)
           .filter(::isValidCinemaEntry)
@@ -188,7 +206,7 @@ class MovieCatalogRepository(
         return@coroutineScope CatalogFeedResult(
           spotlight = fallback.take(5),
           rankings = fallback.mapIndexed { idx, m -> m.copy(rankPosition = idx + 1) },
-          anime = fallback.filter { it.mediaType.equals("Anime", ignoreCase = true) },
+          anime = fallback.filter(::isGenuineAnime),
           recommendations = fallback.shuffled(),
           rails = buildOfflineRails(fallback),
           allMovies = fallback,
@@ -209,15 +227,11 @@ class MovieCatalogRepository(
             .mapIndexed { idx, m -> m.copy(rankPosition = idx + 1) }
         }
 
+      val seenAnimeTitles = HashSet<String>()
       val effectiveAnime =
-        if (mboxAnime.isNotEmpty()) {
-          mboxAnime
-        } else {
-          combined.filter {
-            it.mediaType.equals("Anime", ignoreCase = true) ||
-              it.genre.contains("Anim", ignoreCase = true)
-          }
-        }
+        (enrichedHomeAnime + mboxAnime + combined.filter(::isGenuineAnime))
+          .filter(::isGenuineAnime)
+          .filter { seenAnimeTitles.add(normalizeTitleKey(it.title)) }
 
       val recommendations =
         (homeRails.firstOrNull()?.movies.orEmpty() +
@@ -429,8 +443,7 @@ class MovieCatalogRepository(
           val mboxSort =
             when (sortMode) {
               AnimeSortMode.NEWEST -> "LATEST"
-              AnimeSortMode.TOP_RANKED, AnimeSortMode.POPULAR -> "RECOMMEND"
-              AnimeSortMode.AIRING -> "RECOMMEND"
+              AnimeSortMode.TOP_RANKED, AnimeSortMode.POPULAR, AnimeSortMode.AIRING -> "RECOMMEND"
             }
           val mboxGenre =
             if (genreLabel.equals("All", ignoreCase = true)) "Animation" else genreLabel
@@ -440,24 +453,25 @@ class MovieCatalogRepository(
             perPage = 20,
             sort = mboxSort,
             genre = mboxGenre,
-            overrideMediaType = "Anime",
+            country = "Japan",
           )
         }.getOrDefault(emptyList())
       }.orEmpty()
     }
 
-    val jikanHits = jikanDef.await().filter(::isValidCinemaEntry)
+    val jikanHits = jikanDef.await().filter(::isGenuineAnime)
     val mboxHits =
       mboxDef.await().filter { m ->
-        isValidCinemaEntry(m) &&
+        isGenuineAnime(m) &&
           (genreLabel.equals("All", ignoreCase = true) ||
-            m.genre.contains(genreLabel, ignoreCase = true) ||
-            m.country.equals("Japan", ignoreCase = true) ||
-            m.language.orEmpty().contains("Japanese", ignoreCase = true))
+            m.genre.contains(genreLabel, ignoreCase = true))
       }
 
-    // Merge Jikan rankings with streamable MovieBox items matched by normalized title
-    val mboxByTitle = mboxHits.associateBy { normalizeTitleKey(it.title) }
+    // Merge Jikan/AniList rankings with streamable MovieBox items matched by normalized title
+    val cachedAnimeStreams =
+      cache.values.filter { it.subjectId.isNotBlank() && isGenuineAnime(it) }
+    val mboxByTitle =
+      (cachedAnimeStreams + mboxHits).associateBy { normalizeTitleKey(it.title) }
     val enrichedJikan =
       jikanHits.map { anime ->
         val streamMatch = mboxByTitle[normalizeTitleKey(anime.title)]
@@ -471,7 +485,11 @@ class MovieCatalogRepository(
 
     val seenTitles = enrichedJikan.mapTo(HashSet()) { normalizeTitleKey(it.title) }
     val uniqueMbox = mboxHits.filter { seenTitles.add(normalizeTitleKey(it.title)) }
-    val merged = (enrichedJikan + uniqueMbox).filter(::isValidCinemaEntry).distinctBy { it.id }
+    val merged =
+      sortAnimeMovies(
+        (enrichedJikan + uniqueMbox).filter(::isGenuineAnime).distinctBy { it.id },
+        sortMode,
+      )
     merged.forEach { cache[it.id] = it }
     merged
   }
@@ -856,6 +874,71 @@ class MovieCatalogRepository(
     return true
   }
 
+  internal fun isGenuineAnime(movie: Movie): Boolean {
+    if (!isValidCinemaEntry(movie)) return false
+    if (movie.id.startsWith("mal_") || movie.id.startsWith("anilist_")) return true
+    if (movie.sourceProvider.equals("Decan Anime", ignoreCase = true)) return true
+    val nonAnimeLiveCountries =
+      setOf(
+        "united states",
+        "usa",
+        "us",
+        "south africa",
+        "nigeria",
+        "united kingdom",
+        "uk",
+        "canada",
+        "australia",
+        "france",
+        "spain",
+        "india",
+        "brazil",
+        "mexico",
+        "turkey",
+      )
+    val countryLower = movie.country.orEmpty().trim().lowercase()
+    if (countryLower in nonAnimeLiveCountries) return false
+
+    val hasAnimeGenre = movie.genre.contains("Anime", ignoreCase = true)
+    val hasAnimationGenre = movie.genre.contains("Animation", ignoreCase = true)
+    val isEastAsianOrJapanese =
+      countryLower in setOf("japan", "china", "south korea") ||
+        movie.language.orEmpty().contains("Japanese", ignoreCase = true)
+    if (hasAnimeGenre && (countryLower.isBlank() || isEastAsianOrJapanese)) return true
+    if (hasAnimationGenre && isEastAsianOrJapanese) return true
+    return false
+  }
+
+  fun sortAnimeMovies(movies: List<Movie>, sortMode: AnimeSortMode): List<Movie> {
+    val clean = movies.filter(::isGenuineAnime)
+    return when (sortMode) {
+      AnimeSortMode.TOP_RANKED ->
+        clean.sortedWith(
+          compareBy<Movie> { it.rankPosition ?: Int.MAX_VALUE }
+            .thenByDescending { it.imdbRating?.toDoubleOrNull() ?: 0.0 }
+            .thenByDescending { if (it.subjectId.isNotBlank()) 1 else 0 }
+        )
+      AnimeSortMode.POPULAR ->
+        clean.sortedWith(
+          compareByDescending<Movie> { it.imdbRating?.toDoubleOrNull() ?: 0.0 }
+            .thenBy { it.rankPosition ?: Int.MAX_VALUE }
+            .thenByDescending { if (it.subjectId.isNotBlank()) 1 else 0 }
+        )
+      AnimeSortMode.AIRING ->
+        clean.sortedWith(
+          compareByDescending<Movie> { (it.releaseYear.toIntOrNull() ?: 0) >= 2024 }
+            .thenByDescending { it.releaseYear.toIntOrNull() ?: 0 }
+            .thenByDescending { it.imdbRating?.toDoubleOrNull() ?: 0.0 }
+        )
+      AnimeSortMode.NEWEST ->
+        clean.sortedWith(
+          compareByDescending<Movie> { it.releaseYear.toIntOrNull() ?: 0 }
+            .thenByDescending { it.releaseDateLabel }
+            .thenByDescending { it.imdbRating?.toDoubleOrNull() ?: 0.0 }
+        )
+    }
+  }
+
   fun sortCatalogMovies(movies: List<Movie>, sortMode: CategorySortMode): List<Movie> {
     val clean = movies.filter(::isValidCinemaEntry)
     return when (sortMode) {
@@ -937,6 +1020,8 @@ class MovieCatalogRepository(
             m.imdbRating?.let { put("imdbRating", it) }
             m.rankPosition?.let { put("rankPosition", it) }
             m.detailPath?.let { put("detailPath", it) }
+            m.country?.let { put("country", it) }
+            m.language?.let { put("language", it) }
             put("sourceProvider", m.sourceProvider)
           }
         )
@@ -970,6 +1055,8 @@ class MovieCatalogRepository(
             mediaType = o.optString("mediaType", "Movie"),
             imdbRating = o.optString("imdbRating").takeIf { it.isNotBlank() && it != "null" },
             detailPath = o.optString("detailPath").takeIf { it.isNotBlank() && it != "null" },
+            country = o.optString("country").takeIf { it.isNotBlank() && it != "null" },
+            language = o.optString("language").takeIf { it.isNotBlank() && it != "null" },
             sourceProvider = o.optString("sourceProvider", "Decan"),
             rankPosition = o.optInt("rankPosition", 0).takeIf { it > 0 },
           )
@@ -1000,7 +1087,7 @@ class MovieCatalogRepository(
 
   companion object {
     private const val BASE_URL = "https://itunes.apple.com/"
-    private const val SNAPSHOT_KEY = "catalog_home_snapshot_v2"
+    private const val SNAPSHOT_KEY = "catalog_home_snapshot_v3"
     private const val SNAPSHOT_MAX_AGE_MS = 12 * 3600_000L
     private const val HOME_CACHE_TTL_MS = 5 * 60_000L
     private const val DETAIL_CACHE_TTL_MS = 5 * 60_000L
@@ -1100,21 +1187,25 @@ private object OfflineCatalogFallback {
         contentRating = "R",
       ),
       Movie(
-        id = "itunes_1690852725",
-        trackId = 1690852725L,
-        title = "Spider-Man: Across the Spider-Verse",
-        director = "Joaquim Dos Santos",
-        genre = "Animation",
-        releaseYear = "2023",
-        releaseDateLabel = "2023-06-02",
+        id = "mal_16498",
+        trackId = 16498L,
+        title = "Attack on Titan",
+        director = "Wit Studio",
+        genre = "Action, Drama, Supernatural",
+        releaseYear = "2013",
+        releaseDateLabel = "2013-04-07",
         posterUrl = "",
         backdropUrl = "",
         previewUrl = null,
         synopsis =
-          "Miles Morales catapults across the Multiverse, where he encounters a team of Spider-People charged with protecting its very existence.",
-        runtimeMinutes = 140,
-        contentRating = "PG",
+          "After his hometown is destroyed, young Eren Yeager vows to cleanse the earth of the giant humanoid Titans that have brought humanity to the brink of extinction.",
+        runtimeMinutes = 24,
+        contentRating = "TV • ANIME",
         mediaType = "Anime",
+        imdbRating = "9.1",
+        country = "Japan",
+        language = "Japanese",
+        sourceProvider = "Decan Anime",
       ),
       Movie(
         id = "itunes_1488022263",

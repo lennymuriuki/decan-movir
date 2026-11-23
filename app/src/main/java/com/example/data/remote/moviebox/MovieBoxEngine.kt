@@ -245,7 +245,11 @@ class MovieBoxEngine(
           sub = obj,
           defaultIsSeries = (tabId == 5),
           overrideMediaType = overrideMediaType,
-        )?.let { out.add(it) }
+        )?.let { movie ->
+          if (overrideMediaType != "Anime" || isAnimeMovie(movie)) {
+            out.add(movie)
+          }
+        }
       }
       out
     }
@@ -265,7 +269,11 @@ class MovieBoxEngine(
   ): List<Movie> = getFilteredFeed(tabId = 5, page = page, perPage = perPage, sort = sort, genre = genre)
 
   suspend fun getAnime(page: Int = 1, perPage: Int = 24): List<Movie> {
-    val animeSeries =
+    val animeSearch =
+      runCatching {
+        search(query = "anime", page = page, perPage = perPage).filter(::isAnimeMovie)
+      }.getOrDefault(emptyList())
+    val japanSeries =
       runCatching {
         getFilteredFeed(
           tabId = 5,
@@ -273,8 +281,8 @@ class MovieBoxEngine(
           perPage = perPage,
           sort = "RECOMMEND",
           genre = "Animation",
-          overrideMediaType = "Anime",
-        )
+          country = "Japan",
+        ).filter(::isAnimeMovie)
       }.getOrDefault(emptyList())
     val animeMovies =
       runCatching {
@@ -284,10 +292,23 @@ class MovieBoxEngine(
           perPage = perPage / 2,
           sort = "RECOMMEND",
           genre = "Animation",
-          overrideMediaType = "Anime",
-        )
+          country = "Japan",
+        ).filter(::isAnimeMovie)
       }.getOrDefault(emptyList())
-    return (animeSeries + animeMovies).distinctBy { it.id }
+    return (animeSearch + japanSeries + animeMovies).distinctBy { it.id }
+  }
+
+  internal fun isAnimeMovie(movie: Movie): Boolean {
+    if (movie.genre.contains("Anime", ignoreCase = true)) return true
+    if (!movie.genre.contains("Animation", ignoreCase = true)) return false
+    val country = movie.country.orEmpty()
+    val nonAnimeLiveCountries = setOf("united states", "usa", "south africa", "nigeria", "united kingdom", "uk")
+    if (country.lowercase() in nonAnimeLiveCountries) return false
+    return country.equals("Japan", ignoreCase = true) ||
+      country.equals("China", ignoreCase = true) ||
+      country.equals("South Korea", ignoreCase = true) ||
+      movie.language.orEmpty().contains("Japanese", ignoreCase = true) ||
+      country.isBlank()
   }
 
   suspend fun getRecommendations(subjectId: String, page: Int = 1, perPage: Int = 12): List<Movie> {
@@ -879,27 +900,34 @@ class MovieBoxEngine(
     if (isMusicOrAudioSubject(subjectType, title, rawGenre, durationRaw)) return null
 
     val country = sub.optString("countryName").takeIf { it.isNotBlank() }
+    val lang = sub.optString("language").takeIf { it.isNotBlank() }
     val inferredAnime =
       rawGenre.contains("Anime", ignoreCase = true) ||
         (rawGenre.contains("Animation", ignoreCase = true) &&
           (country.equals("Japan", ignoreCase = true) ||
-            sub.optString("language").contains("Japanese", ignoreCase = true)))
+            lang.orEmpty().contains("Japanese", ignoreCase = true)))
     val mediaType =
-      overrideMediaType
-        ?: when {
-          inferredAnime -> "Anime"
-          subjectType == 1 -> "Movie"
-          else -> "Series"
-        }
+      when {
+        overrideMediaType == "Anime" && inferredAnime -> "Anime"
+        overrideMediaType != null && overrideMediaType != "Anime" -> overrideMediaType
+        inferredAnime -> "Anime"
+        subjectType == 1 -> "Movie"
+        else -> "Series"
+      }
     val coverObj = sub.optJSONObject("cover")
     val coverUrl = coverObj?.optString("url").orEmpty().trim()
     val releaseDate = sub.optString("releaseDate")
     val year =
       releaseDate.take(4).takeIf { it.length == 4 && it.all(Char::isDigit) } ?: "2025"
     val primaryGenre =
-      rawGenre.split(",", "/").firstOrNull()?.trim()?.ifBlank { "Cinema" } ?: "Cinema"
+      rawGenre
+        .split(",", "/")
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .take(3)
+        .joinToString(", ")
+        .ifBlank { "Cinema" }
     val imdb = sub.optString("imdbRatingValue").takeIf { it.isNotBlank() && it != "0" }
-    val lang = sub.optString("language").takeIf { it.isNotBlank() }
     val runtimeMin =
       when {
         durationRaw > 600 -> (durationRaw / 60).coerceIn(0, 1000)

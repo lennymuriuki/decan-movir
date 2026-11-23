@@ -127,19 +127,13 @@ fun DiscoverScreen(
       MediaFilter.SERIES ->
         uiState.allMovies.filter { it.mediaType.equals("Series", ignoreCase = true) }
       MediaFilter.ANIME -> {
-        val base = uiState.animeFeed.ifEmpty { uiState.anime }
-        val localExtras =
-          uiState.allMovies.filter {
-            it.mediaType.equals("Anime", ignoreCase = true) ||
-              it.genre.contains("Anime", ignoreCase = true)
-          }
+        val base = (uiState.animeFeed.ifEmpty { uiState.anime }).filter(::isGenuineAnimeEntry)
+        val localExtras = uiState.allMovies.filter(::isGenuineAnimeEntry)
         val combinedAnime = (base + localExtras).distinctBy { it.id }
         if (uiState.selectedAnimeGenre == "All") {
           combinedAnime
         } else {
-          combinedAnime
-            .filter { it.genre.contains(uiState.selectedAnimeGenre, ignoreCase = true) }
-            .ifEmpty { uiState.animeFeed }
+          combinedAnime.filter { it.genre.contains(uiState.selectedAnimeGenre, ignoreCase = true) }
         }
       }
       MediaFilter.RANKINGS -> {
@@ -170,7 +164,7 @@ fun DiscoverScreen(
 
   val filteredMovies =
     if (isAnimeMode) {
-      rawFiltered
+      applyAnimeUiSort(rawFiltered, uiState.selectedAnimeSort)
     } else {
       applyUiSort(rawFiltered, uiState.selectedCategorySort)
     }
@@ -840,15 +834,77 @@ fun DiscoverScreen(
   }
 }
 
+private fun isGenuineAnimeEntry(movie: Movie): Boolean {
+  if (movie.id.startsWith("mal_") || movie.id.startsWith("anilist_")) return true
+  if (movie.sourceProvider.equals("Decan Anime", ignoreCase = true)) return true
+  val countryLower = movie.country.orEmpty().trim().lowercase()
+  if (
+    countryLower in
+      setOf(
+        "united states",
+        "usa",
+        "us",
+        "south africa",
+        "nigeria",
+        "united kingdom",
+        "uk",
+        "canada",
+        "australia",
+        "france",
+        "spain",
+        "india",
+        "brazil",
+        "mexico",
+        "turkey",
+      )
+  ) {
+    return false
+  }
+  val hasAnimeGenre = movie.genre.contains("Anime", ignoreCase = true)
+  val hasAnimationGenre = movie.genre.contains("Animation", ignoreCase = true)
+  val isEastAsianOrJapanese =
+    countryLower in setOf("japan", "china", "south korea") ||
+      movie.language.orEmpty().contains("Japanese", ignoreCase = true)
+  return (hasAnimeGenre && (countryLower.isBlank() || isEastAsianOrJapanese)) ||
+    (hasAnimationGenre && isEastAsianOrJapanese)
+}
+
 private fun matchesCategory(movie: Movie, category: String): Boolean {
   if (category.equals("All", ignoreCase = true)) return true
   if (category.equals("Anime", ignoreCase = true)) {
-    return movie.mediaType.equals("Anime", ignoreCase = true) ||
-      movie.genre.contains("Anime", ignoreCase = true)
+    return isGenuineAnimeEntry(movie)
   }
   return movie.genre.contains(category, ignoreCase = true) ||
     movie.synopsis.contains(category, ignoreCase = true)
 }
+
+private fun applyAnimeUiSort(movies: List<Movie>, sortMode: AnimeSortMode): List<Movie> =
+  when (sortMode) {
+    AnimeSortMode.TOP_RANKED ->
+      movies.sortedWith(
+        compareBy<Movie> { it.rankPosition ?: Int.MAX_VALUE }
+          .thenByDescending { it.imdbRating?.toDoubleOrNull() ?: 0.0 }
+          .thenByDescending { if (it.subjectId.isNotBlank()) 1 else 0 }
+      )
+    AnimeSortMode.POPULAR ->
+      movies.sortedWith(
+        compareByDescending<Movie> { it.imdbRating?.toDoubleOrNull() ?: 0.0 }
+          .thenBy { it.rankPosition ?: Int.MAX_VALUE }
+          .thenByDescending { if (it.subjectId.isNotBlank()) 1 else 0 }
+      )
+    AnimeSortMode.AIRING ->
+      movies.sortedWith(
+        compareByDescending<Movie> { (it.releaseYear.toIntOrNull() ?: 0) >= 2024 }
+          .thenByDescending { it.releaseYear.toIntOrNull() ?: 0 }
+          .thenByDescending { it.imdbRating?.toDoubleOrNull() ?: 0.0 }
+      )
+    AnimeSortMode.NEWEST ->
+      movies.sortedWith(
+        compareByDescending<Movie> { it.releaseYear.toIntOrNull() ?: 0 }
+          .thenByDescending { it.releaseDateLabel }
+          .thenByDescending { it.imdbRating?.toDoubleOrNull() ?: 0.0 }
+      )
+  }
 
 private fun applyUiSort(movies: List<Movie>, sortMode: CategorySortMode): List<Movie> =
   when (sortMode) {

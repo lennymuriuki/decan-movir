@@ -6,6 +6,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.example.data.model.Movie
+import com.example.data.remote.AnimeSortMode
 import com.example.data.remote.CategorySortMode
 import com.example.data.remote.JikanTvMazeService
 import com.example.data.remote.MovieCatalogRepository
@@ -326,5 +327,278 @@ class DiscoveryAndFilterTest {
 
     composeTestRule.onNodeWithTag("category_sort_TOP_RANKED").performClick()
     assertEquals(CategorySortMode.TOP_RANKED, clickedSort)
+  }
+
+  @Test
+  fun aniListParser_parsesGenuineAnimeAndSkipsMusicFormat() {
+    val payload =
+      JSONObject(
+        """
+        {
+          "data": {
+            "Page": {
+              "media": [
+                {
+                  "id": 151807,
+                  "title": { "english": "Solo Leveling", "romaji": "Ore dake Level Up na Ken" },
+                  "genres": ["Action", "Adventure", "Fantasy"],
+                  "averageScore": 84,
+                  "seasonYear": 2024,
+                  "startDate": { "year": 2024, "month": 1, "day": 7 },
+                  "episodes": 12,
+                  "duration": 24,
+                  "format": "TV",
+                  "description": "E-rank hunter rises.",
+                  "coverImage": { "extraLarge": "https://img.example/solo.jpg" },
+                  "studios": { "nodes": [{ "name": "A-1 Pictures" }] }
+                },
+                {
+                  "id": 999999,
+                  "title": { "english": "Bling-Bang-Bang-Born MV", "romaji": "MV" },
+                  "genres": ["Music"],
+                  "averageScore": 75,
+                  "seasonYear": 2024,
+                  "episodes": 1,
+                  "duration": 3,
+                  "format": "MUSIC"
+                }
+              ]
+            }
+          }
+        }
+        """.trimIndent()
+      )
+
+    val parsed = JikanTvMazeService().parseAniListAnimeResponse(payload, startRank = 1)
+    assertEquals(1, parsed.size)
+    assertEquals("Solo Leveling", parsed.first().title)
+    assertEquals("Anime", parsed.first().mediaType)
+    assertEquals("Japan", parsed.first().country)
+    assertEquals("Decan Anime", parsed.first().sourceProvider)
+    assertEquals("8.4", parsed.first().imdbRating)
+    assertEquals(1, parsed.first().rankPosition)
+  }
+
+  @Test
+  fun movieBoxEngine_rejectsLiveActionShowsFromAnimeFilter() {
+    val engine = MovieBoxEngine()
+    val payload =
+      JSONObject(
+        """
+        {
+          "data": {
+            "items": [
+              {
+                "subjectId": "101",
+                "title": "Sistas",
+                "subjectType": 2,
+                "genre": "Comedy,Drama",
+                "countryName": "United States",
+                "releaseDate": "2019-10-23",
+                "imdbRatingValue": "5.7"
+              },
+              {
+                "subjectId": "102",
+                "title": "Prison Break",
+                "subjectType": 2,
+                "genre": "Action,Crime,Drama",
+                "countryName": "United States",
+                "releaseDate": "2005-08-29",
+                "imdbRatingValue": "8.3"
+              },
+              {
+                "subjectId": "103",
+                "title": "The Vampire Diaries",
+                "subjectType": 2,
+                "genre": "Drama,Fantasy,Horror",
+                "countryName": "United States",
+                "releaseDate": "2009-09-10",
+                "imdbRatingValue": "7.7"
+              },
+              {
+                "subjectId": "104",
+                "title": "Attack on Titan",
+                "subjectType": 2,
+                "genre": "Animation,Action,Supernatural",
+                "countryName": "Japan",
+                "language": "Japanese",
+                "releaseDate": "2013-04-07",
+                "imdbRatingValue": "9.1"
+              }
+            ]
+          }
+        }
+        """.trimIndent()
+      )
+
+    val parsed = engine.parseSearchResultsJson(payload)
+    val animeOnly = parsed.filter { engine.isAnimeMovie(it) }
+    assertEquals(1, animeOnly.size)
+    assertEquals("Attack on Titan", animeOnly.first().title)
+    assertEquals("Anime", animeOnly.first().mediaType)
+    assertTrue(parsed.first { it.title == "Prison Break" }.mediaType != "Anime")
+    assertTrue(parsed.first { it.title == "Sistas" }.mediaType != "Anime")
+  }
+
+  @Test
+  fun catalogRepository_isGenuineAnimeRejectsLiveActionAndSortsAnimeModes() {
+    val repo = MovieCatalogRepository()
+    val fakePrisonBreak =
+      Movie(
+        id = "mbox_pb",
+        trackId = 1L,
+        title = "Prison Break",
+        director = "FOX",
+        genre = "Action",
+        releaseYear = "2005",
+        releaseDateLabel = "2005-08-29",
+        posterUrl = "",
+        backdropUrl = "",
+        previewUrl = null,
+        synopsis = "Escape.",
+        runtimeMinutes = 44,
+        contentRating = "ANIME",
+        mediaType = "Anime", // mistakenly tagged Anime
+        imdbRating = "8.3",
+        country = "United States",
+      )
+    val frieren =
+      Movie(
+        id = "anilist_154587",
+        trackId = 154587L,
+        title = "Frieren: Beyond Journey's End",
+        director = "Madhouse",
+        genre = "Adventure, Drama, Fantasy",
+        releaseYear = "2023",
+        releaseDateLabel = "2023-09-29",
+        posterUrl = "",
+        backdropUrl = "",
+        previewUrl = null,
+        synopsis = "Elf mage journey.",
+        runtimeMinutes = 24,
+        contentRating = "TV • ANIME",
+        mediaType = "Anime",
+        imdbRating = "9.3",
+        rankPosition = 1,
+        country = "Japan",
+        language = "Japanese",
+        sourceProvider = "Decan Anime",
+      )
+    val dandadan =
+      Movie(
+        id = "mal_57334",
+        trackId = 57334L,
+        title = "Dandadan",
+        director = "Science SARU",
+        genre = "Action, Supernatural",
+        releaseYear = "2025",
+        releaseDateLabel = "2025-07-01",
+        posterUrl = "",
+        backdropUrl = "",
+        previewUrl = null,
+        synopsis = "Aliens and ghosts.",
+        runtimeMinutes = 24,
+        contentRating = "TV • ANIME",
+        mediaType = "Anime",
+        imdbRating = "8.7",
+        rankPosition = 12,
+        country = "Japan",
+        language = "Japanese",
+        sourceProvider = "Decan Anime",
+      )
+
+    assertFalse(repo.isGenuineAnime(fakePrisonBreak))
+    assertTrue(repo.isGenuineAnime(frieren))
+    assertTrue(repo.isGenuineAnime(dandadan))
+
+    val byRank = repo.sortAnimeMovies(listOf(fakePrisonBreak, dandadan, frieren), AnimeSortMode.TOP_RANKED)
+    assertEquals(listOf("anilist_154587", "mal_57334"), byRank.map { it.id })
+
+    val byNewest = repo.sortAnimeMovies(listOf(fakePrisonBreak, frieren, dandadan), AnimeSortMode.NEWEST)
+    assertEquals(listOf("mal_57334", "anilist_154587"), byNewest.map { it.id })
+  }
+
+  @Test
+  fun discoverScreen_animeModeHidesNonAnimeShowsAndTriggersSortCallback() {
+    val nonAnimeLive =
+      Movie(
+        id = "mbox_live",
+        trackId = 50L,
+        title = "Prison Break",
+        director = "FOX",
+        genre = "Action",
+        releaseYear = "2005",
+        releaseDateLabel = "2005-08-29",
+        posterUrl = "",
+        backdropUrl = "",
+        previewUrl = null,
+        synopsis = "Prison escape.",
+        runtimeMinutes = 44,
+        contentRating = "ANIME",
+        mediaType = "Anime",
+        country = "United States",
+      )
+    val genuineAnime =
+      Movie(
+        id = "mal_40748",
+        trackId = 40748L,
+        title = "Jujutsu Kaisen",
+        director = "MAPPA",
+        genre = "Action, Supernatural",
+        releaseYear = "2023",
+        releaseDateLabel = "2023-07-06",
+        posterUrl = "",
+        backdropUrl = "",
+        previewUrl = null,
+        synopsis = "Cursed energy.",
+        runtimeMinutes = 24,
+        contentRating = "TV • ANIME",
+        mediaType = "Anime",
+        imdbRating = "8.7",
+        country = "Japan",
+        language = "Japanese",
+        sourceProvider = "Decan Anime",
+      )
+
+    var selectedAnimeSort: AnimeSortMode? = null
+    composeTestRule.setContent {
+      DecanMovieTheme {
+        DiscoverScreen(
+          uiState =
+            DiscoverUiState(
+              isLoading = false,
+              allMovies = listOf(nonAnimeLive, genuineAnime),
+              anime = listOf(nonAnimeLive, genuineAnime),
+              animeFeed = listOf(nonAnimeLive, genuineAnime),
+              selectedMediaFilter = MediaFilter.ANIME,
+              selectedAnimeGenre = "All",
+              selectedAnimeSort = AnimeSortMode.TOP_RANKED,
+            ),
+          updateState = UpdateUiState(),
+          savedLibraryMap = emptyMap(),
+          continueWatching = emptyList(),
+          unreadNotifications = 0,
+          onRefresh = {},
+          onSelectMediaFilter = {},
+          onSelectGenre = {},
+          onSelectAnimeSort = { selectedAnimeSort = it },
+          onOpenMovie = {},
+          onPlayMovie = {},
+          onResumeWatching = {},
+          onRemoveContinueWatching = {},
+          onToggleWatchlist = {},
+          onLoadMore = {},
+          onOpenDownloads = {},
+          onOpenNotifications = {},
+          onOpenSettings = {},
+        )
+      }
+    }
+
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("movie_card_mal_40748").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("movie_card_mbox_live").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("anime_sort_NEWEST").performClick()
+    assertEquals(AnimeSortMode.NEWEST, selectedAnimeSort)
   }
 }

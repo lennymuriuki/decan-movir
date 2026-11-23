@@ -251,7 +251,15 @@ class DiscoverViewModel(
   }
 
   fun selectAnimeGenre(genre: String) {
-    _uiState.update { it.copy(selectedAnimeGenre = genre) }
+    _uiState.update {
+      it.copy(
+        selectedAnimeGenre = genre,
+        animeFeed =
+          if (genre == "All") it.animeFeed
+          else it.animeFeed.filter { m -> m.genre.contains(genre, ignoreCase = true) },
+        isLoadingAnime = true,
+      )
+    }
     animePage = 1
     fetchAnimeFiltered(
       genre = genre,
@@ -262,7 +270,7 @@ class DiscoverViewModel(
   }
 
   fun selectAnimeSort(sortMode: AnimeSortMode) {
-    _uiState.update { it.copy(selectedAnimeSort = sortMode) }
+    _uiState.update { it.copy(selectedAnimeSort = sortMode, isLoadingAnime = true) }
     animePage = 1
     fetchAnimeFiltered(
       genre = _uiState.value.selectedAnimeGenre,
