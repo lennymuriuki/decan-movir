@@ -15,10 +15,6 @@ jobs:
     name: Build Decan Movie Windows
     runs-on: windows-latest
 
-    defaults:
-      run:
-        working-directory: desktop
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,33 +23,60 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: desktop/package-lock.json
 
-      - name: Install dependencies
+      - name: Show project structure
+        shell: powershell
+        run: |
+          Write-Host "Repository:"
+          Get-ChildItem
+
+          Write-Host "Desktop:"
+          Get-ChildItem desktop
+
+      - name: Install desktop dependencies
+        working-directory: desktop
         run: npm install
 
       - name: Validate desktop source
+        working-directory: desktop
         run: npm run check
 
-      - name: Build Windows installer, portable and ZIP
+      - name: Build Windows installer, portable EXE and ZIP
+        working-directory: desktop
         run: npm run dist:win
 
       - name: Generate SHA-256 checksums
         shell: powershell
         run: |
-          $files = Get-ChildItem -Path release -File
+          $release = "desktop/release"
 
-          $output = @()
+          if (!(Test-Path $release)) {
+            Write-Error "Release directory was not created."
+            exit 1
+          }
 
-          foreach ($file in $files) {
+          $files = Get-ChildItem $release -File
+
+          if ($files.Count -eq 0) {
+            Write-Error "No Windows build files were generated."
+            exit 1
+          }
+
+          $output = foreach ($file in $files) {
             $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower()
-            $output += "$hash  $($file.Name)"
+            "$hash  $($file.Name)"
           }
 
           $output | Out-File `
-            -FilePath release/checksums-sha256.txt `
+            -FilePath "$release/checksums-sha256.txt" `
             -Encoding utf8
+
+      - name: List generated Windows files
+        shell: powershell
+        run: |
+          Write-Host "Generated files:"
+          Get-ChildItem desktop/release -File |
+            Select-Object Name, Length
 
       - name: Upload Windows build artifacts
         uses: actions/upload-artifact@v4
@@ -67,7 +90,7 @@ jobs:
             desktop/release/checksums-sha256.txt
           if-no-files-found: error
 
-      - name: Upload Windows assets to GitHub Release
+      - name: Publish Windows files to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
