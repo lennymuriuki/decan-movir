@@ -173,7 +173,7 @@ class MovieBoxEngine(
       )
     }
 
-  suspend fun getRankings(page: Int = 1, perPage: Int = 20): List<Movie> {
+  suspend fun getRankings(page: Int = 1, perPage: Int = 30): List<Movie> {
     val path =
       "/wefeed-mobile-bff/tab/ranking-list?tabId=0&categoryType=4516404531735022304&page=$page&perPage=$perPage"
     val data = apiRequest("GET", path).optJSONObject("data") ?: JSONObject()
@@ -875,6 +875,9 @@ class MovieBoxEngine(
 
     val subjectType = sub.optInt("subjectType", if (defaultIsSeries) 2 else 1)
     val rawGenre = sub.optString("genre").trim()
+    val durationRaw = sub.optInt("duration", 0)
+    if (isMusicOrAudioSubject(subjectType, title, rawGenre, durationRaw)) return null
+
     val country = sub.optString("countryName").takeIf { it.isNotBlank() }
     val inferredAnime =
       rawGenre.contains("Anime", ignoreCase = true) ||
@@ -897,7 +900,6 @@ class MovieBoxEngine(
       rawGenre.split(",", "/").firstOrNull()?.trim()?.ifBlank { "Cinema" } ?: "Cinema"
     val imdb = sub.optString("imdbRatingValue").takeIf { it.isNotBlank() && it != "0" }
     val lang = sub.optString("language").takeIf { it.isNotBlank() }
-    val durationRaw = sub.optInt("duration", 0)
     val runtimeMin =
       when {
         durationRaw > 600 -> (durationRaw / 60).coerceIn(0, 1000)
@@ -937,6 +939,37 @@ class MovieBoxEngine(
       detailPath = detailPath,
       sourceProvider = "Decan",
     )
+  }
+
+  internal fun isMusicOrAudioSubject(
+    subjectType: Int,
+    title: String,
+    rawGenre: String,
+    durationRaw: Int,
+  ): Boolean {
+    // MovieBox subjectType: 1 = Movie, 2 = Series/Anime, >= 3 = Music / Audio / Short Clip / Podcast
+    if (subjectType !in 0..2) return true
+    val genres =
+      rawGenre.split(",", "/", "&", "|").map { it.trim().lowercase() }.filter { it.isNotBlank() }
+    val musicGenres = setOf("music", "song", "songs", "music video", "mv", "audio", "podcast", "karaoke", "single", "ost", "soundtrack", "radio")
+    if (genres.any { it in musicGenres }) return true
+    val lowerTitle = title.lowercase()
+    if (
+      lowerTitle.contains("(official music video)") ||
+        lowerTitle.contains("(official video)") ||
+        lowerTitle.contains("(official audio)") ||
+        lowerTitle.contains("(lyric video)") ||
+        lowerTitle.contains("(lyrics)") ||
+        lowerTitle.contains("[mv]") ||
+        lowerTitle.contains("(mv)") ||
+        lowerTitle.endsWith(" - mv")
+    ) {
+      return true
+    }
+    if (durationRaw in 1..420 && genres.any { it.contains("music") || it.contains("song") || it.contains("concert") }) {
+      return true
+    }
+    return false
   }
 
   companion object {

@@ -210,8 +210,14 @@ private fun GuestDecanApp(
   onConsumedDeepLink: () -> Unit,
   onAuthSuccess: () -> Unit,
 ) {
+  val context = LocalContext.current
   val scope = rememberCoroutineScope()
-  val catalogRepository = remember { MovieCatalogRepository() }
+  val catalogRepository = remember(context) {
+    MovieCatalogRepository(
+      snapshotPrefs =
+        context.applicationContext.getSharedPreferences("decan_catalog_cache", Context.MODE_PRIVATE)
+    )
+  }
   val discoverViewModel: DiscoverViewModel =
     viewModel(
       key = "discover_guest",
@@ -288,7 +294,12 @@ private fun AuthenticatedDecanApp(
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
   val credentialManager = remember(context) { CredentialManager.create(context) }
-  val catalogRepository = remember { MovieCatalogRepository() }
+  val catalogRepository = remember(context) {
+    MovieCatalogRepository(
+      snapshotPrefs =
+        context.applicationContext.getSharedPreferences("decan_catalog_cache", Context.MODE_PRIVATE)
+    )
+  }
 
   val discoverViewModel: DiscoverViewModel =
     viewModel(
@@ -642,6 +653,7 @@ private fun DecanMainShell(
                 onRefresh = discoverViewModel::refreshCatalog,
                 onSelectMediaFilter = discoverViewModel::selectMediaFilter,
                 onSelectGenre = discoverViewModel::selectGenre,
+                onSelectCategorySort = discoverViewModel::selectCategorySort,
                 onSelectAnimeGenre = discoverViewModel::selectAnimeGenre,
                 onSelectAnimeSort = discoverViewModel::selectAnimeSort,
                 onOpenMovie = { movie -> navController.navigate(buildDetailRoute(movie.id)) },

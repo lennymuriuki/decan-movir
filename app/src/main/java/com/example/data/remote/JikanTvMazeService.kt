@@ -125,11 +125,16 @@ class JikanTvMazeService(
           ?: item.optString("title").trim()
       if (malId <= 0L || title.isBlank()) continue
 
-      val images = item.optJSONObject("images")?.optJSONObject("jpg")
-      val largePoster =
-        images?.optString("large_image_url").orEmpty().ifBlank {
-          images?.optString("image_url").orEmpty()
-        }
+      val rawType = item.optString("type").trim()
+      if (
+        rawType.equals("Music", ignoreCase = true) ||
+          rawType.equals("PV", ignoreCase = true) ||
+          rawType.equals("CM", ignoreCase = true) ||
+          rawType.equals("Unknown", ignoreCase = true)
+      ) {
+        continue
+      }
+
       val genresArr = item.optJSONArray("genres") ?: JSONArray()
       val themesArr = item.optJSONArray("themes") ?: JSONArray()
       val genreNames = buildList {
@@ -142,6 +147,27 @@ class JikanTvMazeService(
           if (n.isNotBlank()) add(n)
         }
       }
+      val episodesCount = item.optInt("episodes", 0)
+      val durationStr = item.optString("duration").lowercase()
+      val hasMusicTag = genreNames.any { it.equals("Music", ignoreCase = true) }
+      val isShortClip =
+        durationStr.contains("sec") ||
+          Regex("^([1-6])\\s*min").containsMatchIn(durationStr.trim())
+      val lowerTitle = title.lowercase()
+      if (
+        (hasMusicTag && (episodesCount <= 1 && isShortClip)) ||
+          lowerTitle.contains("(mv)") ||
+          lowerTitle.contains("[mv]") ||
+          lowerTitle.contains("music video")
+      ) {
+        continue
+      }
+
+      val images = item.optJSONObject("images")?.optJSONObject("jpg")
+      val largePoster =
+        images?.optString("large_image_url").orEmpty().ifBlank {
+          images?.optString("image_url").orEmpty()
+        }
       val genreStr = genreNames.distinct().take(3).joinToString(", ").ifBlank { "Anime" }
       val yearInt = item.optInt("year", 0)
       val airedFrom = item.optJSONObject("aired")?.optString("from").orEmpty()
@@ -164,8 +190,7 @@ class JikanTvMazeService(
       val synopsis =
         item.optString("synopsis").takeIf { it.isNotBlank() && it != "null" }
           ?: "$genreStr anime series streaming on Decan Movie."
-      val episodesCount = item.optInt("episodes", 0)
-      val typeLabel = item.optString("type").takeIf { it.isNotBlank() } ?: "TV"
+      val typeLabel = rawType.ifBlank { "TV" }
       val ratingLabel =
         item.optString("rating").takeIf { it.isNotBlank() && it != "null" }?.substringBefore(" ")
           ?: "ANIME"

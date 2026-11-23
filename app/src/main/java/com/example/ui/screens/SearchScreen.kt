@@ -25,7 +25,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -51,6 +50,7 @@ import com.example.R
 import com.example.data.model.Movie
 import com.example.data.model.SavedMovieEntry
 import com.example.data.remote.moviebox.MovieBoxSuggestion
+import com.example.ui.components.CinemaCompactGridSkeleton
 import com.example.ui.components.MoviePosterCard
 import com.example.ui.viewmodel.MovieSortOption
 import com.example.ui.viewmodel.SearchUiState
@@ -261,8 +261,8 @@ fun SearchScreen(
 
     when {
       uiState.isLoading && displayedMovies.isEmpty() -> {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-          CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+        Box(modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 12.dp)) {
+          CinemaCompactGridSkeleton(columns = 3, rows = 3)
         }
       }
       displayedMovies.isEmpty() -> {
@@ -308,10 +308,10 @@ fun SearchScreen(
       }
       else -> {
         LazyVerticalGrid(
-          columns = GridCells.Adaptive(minSize = 148.dp),
+          columns = GridCells.Adaptive(minSize = 108.dp),
           contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 6.dp, bottom = 28.dp),
-          horizontalArrangement = Arrangement.spacedBy(14.dp),
-          verticalArrangement = Arrangement.spacedBy(18.dp),
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+          verticalArrangement = Arrangement.spacedBy(14.dp),
           modifier = Modifier.fillMaxSize().testTag("search_results_grid"),
         ) {
           items(displayedMovies, key = { it.id }) { movie ->
@@ -320,6 +320,7 @@ fun SearchScreen(
               savedEntry = savedLibraryMap[movie.id],
               onClick = { onOpenMovie(movie) },
               onToggleWatchlist = { onToggleWatchlist(movie) },
+              compact = true,
             )
           }
         }

@@ -1,5 +1,6 @@
 package com.example.data.remote
 
+import android.content.SharedPreferences
 import com.example.data.model.Movie
 import com.example.data.model.MovieRail
 import com.example.data.remote.moviebox.MovieBoxEngine
@@ -16,10 +17,20 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
+import org.json.JSONArray
+import org.json.JSONObject
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
+
+enum class CategorySortMode(val label: String) {
+  FEATURED("Featured"),
+  TOP_RANKED("Top Ranked"),
+  HIGHEST_RATED("Top IMDb"),
+  NEWEST("Newest"),
+}
 
 data class CatalogFeedResult(
   val spotlight: List<Movie>,
@@ -36,6 +47,7 @@ class MovieCatalogRepository(
   private val api: ItunesMovieApi = createDefaultApi(),
   private val movieBox: MovieBoxEngine = MovieBoxEngine(),
   private val jikanTvMaze: JikanTvMazeService = JikanTvMazeService(),
+  private val snapshotPrefs: SharedPreferences? = null,
 ) {
   private val cache = ConcurrentHashMap<String, Movie>()
   @Volatile private var cachedHomeFeed: Pair<Long, CatalogFeedResult>? = null
@@ -43,6 +55,47 @@ class MovieCatalogRepository(
   private val streamCache = ConcurrentHashMap<String, Pair<Long, List<MovieBoxStream>>>()
   private val subtitleCache = ConcurrentHashMap<String, Pair<Long, List<MovieBoxSubtitle>>>()
   private val recCache = ConcurrentHashMap<String, Pair<Long, List<Movie>>>()
+
+  fun getCachedHomeSnapshot(): CatalogFeedResult? {
+    cachedHomeFeed?.second?.takeIf { !it.isOfflineFallback && it.allMovies.isNotEmpty() }?.let {
+      return it
+    }
+    val raw = snapshotPrefs?.getString(SNAPSHOT_KEY, null) ?: return null
+    return runCatching {
+      val obj = JSONObject(raw)
+      val savedAt = obj.optLong("savedAt", 0L)
+      if (System.currentTimeMillis() - savedAt > SNAPSHOT_MAX_AGE_MS) return null
+      val all = parseSnapshotMovies(obj.optJSONArray("allMovies")).filter(::isValidCinemaEntry)
+      if (all.isEmpty()) return null
+      all.forEach { cache[it.id] = it }
+      val spotlight = parseSnapshotMovies(obj.optJSONArray("spotlight")).filter(::isValidCinemaEntry)
+      val rankings =
+        parseSnapshotMovies(obj.optJSONArray("rankings"))
+          .filter(::isValidCinemaEntry)
+          .mapIndexed { idx, m -> m.copy(rankPosition = idx + 1) }
+      val anime = parseSnapshotMovies(obj.optJSONArray("anime")).filter(::isValidCinemaEntry)
+      val recommendations =
+        parseSnapshotMovies(obj.optJSONArray("recommendations")).filter(::isValidCinemaEntry)
+      val rails = parseSnapshotRails(obj.optJSONArray("rails"))
+      val keywords = buildList {
+        val arr = obj.optJSONArray("trendingKeywords") ?: JSONArray()
+        for (i in 0 until arr.length()) {
+          val s = arr.optString(i)
+          if (s.isNotBlank()) add(s)
+        }
+      }
+      CatalogFeedResult(
+        spotlight = spotlight.ifEmpty { all.take(5) },
+        rankings = rankings,
+        anime = anime,
+        recommendations = recommendations.ifEmpty { all.take(12) },
+        rails = rails,
+        allMovies = all,
+        trendingKeywords = keywords,
+        isOfflineFallback = false,
+      )
+    }.getOrNull()
+  }
 
   suspend fun loadHomeCatalog(forceRefresh: Boolean = false): CatalogFeedResult = coroutineScope {
     val cached = cachedHomeFeed
@@ -53,53 +106,80 @@ class MovieCatalogRepository(
     }
 
     try {
-      val tokenWarmDef = async { runCatching { movieBox.bootstrapToken() }.getOrNull() }
-      val mboxHomeDeferred = async { runCatching { movieBox.getHome() }.getOrNull() }
+      val tokenWarmDef = async {
+        withTimeoutOrNull(4500L) { runCatching { movieBox.bootstrapToken() }.getOrNull() }
+      }
+      val mboxHomeDeferred = async {
+        withTimeoutOrNull(5500L) { runCatching { movieBox.getHome() }.getOrNull() }
+      }
       val mboxRankingsDeferred = async {
-        runCatching { movieBox.getRankings(page = 1, perPage = 15) }.getOrDefault(emptyList())
+        withTimeoutOrNull(5500L) {
+          runCatching { movieBox.getRankings(page = 1, perPage = 30) }.getOrDefault(emptyList())
+        }.orEmpty()
       }
       val mboxMoviesDeferred = async {
-        runCatching { movieBox.getMovies(page = 1, perPage = 24) }.getOrDefault(emptyList())
+        withTimeoutOrNull(5500L) {
+          runCatching { movieBox.getMovies(page = 1, perPage = 24) }.getOrDefault(emptyList())
+        }.orEmpty()
       }
       val mboxSeriesDeferred = async {
-        runCatching { movieBox.getTvSeries(page = 1, perPage = 24) }.getOrDefault(emptyList())
+        withTimeoutOrNull(5500L) {
+          runCatching { movieBox.getTvSeries(page = 1, perPage = 24) }.getOrDefault(emptyList())
+        }.orEmpty()
       }
       val mboxAnimeDeferred = async {
-        runCatching { movieBox.getAnime(page = 1, perPage = 20) }.getOrDefault(emptyList())
+        withTimeoutOrNull(5500L) {
+          runCatching { movieBox.getAnime(page = 1, perPage = 24) }.getOrDefault(emptyList())
+        }.orEmpty()
       }
       val mboxTrendingDeferred = async {
-        runCatching { movieBox.getTrendingKeywords() }.getOrDefault(emptyList())
+        withTimeoutOrNull(4000L) {
+          runCatching { movieBox.getTrendingKeywords() }.getOrDefault(emptyList())
+        }.orEmpty()
       }
       val topItunesDeferred = async {
-        runCatching { api.getTopMovies().feed?.entry.orEmpty().mapNotNull { it.toDomain() } }
-          .getOrDefault(emptyList())
+        withTimeoutOrNull(4500L) {
+          runCatching { api.getTopMovies().feed?.entry.orEmpty().mapNotNull { it.toDomain() } }
+            .getOrDefault(emptyList())
+        }.orEmpty()
       }
       val sciFiItunesDeferred = async {
-        runCatching {
-            api.searchMovies(term = "sci-fi", limit = 15).results.mapNotNull { it.toDomain() }
-          }
-          .getOrDefault(emptyList())
+        withTimeoutOrNull(4500L) {
+          runCatching {
+              api.searchMovies(term = "sci-fi", limit = 15).results.mapNotNull { it.toDomain() }
+            }
+            .getOrDefault(emptyList())
+        }.orEmpty()
       }
 
       tokenWarmDef.await()
       val mboxHome = mboxHomeDeferred.await()
-      val mboxRankings = mboxRankingsDeferred.await()
-      val mboxMovies = mboxMoviesDeferred.await()
-      val mboxSeries = mboxSeriesDeferred.await()
-      val mboxAnime = mboxAnimeDeferred.await()
+      val mboxRankings = mboxRankingsDeferred.await().filter(::isValidCinemaEntry)
+      val mboxMovies = mboxMoviesDeferred.await().filter(::isValidCinemaEntry)
+      val mboxSeries = mboxSeriesDeferred.await().filter(::isValidCinemaEntry)
+      val mboxAnime = mboxAnimeDeferred.await().filter(::isValidCinemaEntry)
       val trendingKeywords = mboxTrendingDeferred.await()
-      val topItunes = topItunesDeferred.await()
-      val sciFiItunes = sciFiItunesDeferred.await()
+      val topItunes = topItunesDeferred.await().filter(::isValidCinemaEntry)
+      val sciFiItunes = sciFiItunesDeferred.await().filter(::isValidCinemaEntry)
+
+      val homeSpotlight = mboxHome?.spotlight.orEmpty().filter(::isValidCinemaEntry)
+      val homeAll = mboxHome?.allMovies.orEmpty().filter(::isValidCinemaEntry)
+      val homeRails =
+        mboxHome?.rails.orEmpty().mapNotNull { rail ->
+          val cleanMovies = rail.movies.filter(::isValidCinemaEntry)
+          if (cleanMovies.isEmpty()) null else rail.copy(movies = cleanMovies)
+        }
 
       val combined =
-        (mboxHome?.spotlight.orEmpty() +
+        (homeSpotlight +
             mboxRankings +
-            mboxHome?.allMovies.orEmpty() +
+            homeAll +
             mboxMovies +
             mboxSeries +
             mboxAnime +
             topItunes +
             sciFiItunes)
+          .filter(::isValidCinemaEntry)
           .distinctBy { it.id }
 
       if (combined.isEmpty()) {
@@ -121,11 +201,11 @@ class MovieCatalogRepository(
 
       val effectiveRankings =
         if (mboxRankings.isNotEmpty()) {
-          mboxRankings
+          mboxRankings.mapIndexed { idx, m -> m.copy(rankPosition = idx + 1) }
         } else {
           combined
             .sortedByDescending { it.imdbRating?.toDoubleOrNull() ?: 0.0 }
-            .take(10)
+            .take(15)
             .mapIndexed { idx, m -> m.copy(rankPosition = idx + 1) }
         }
 
@@ -140,14 +220,16 @@ class MovieCatalogRepository(
         }
 
       val recommendations =
-        (mboxHome?.rails?.firstOrNull()?.movies.orEmpty() +
+        (homeRails.firstOrNull()?.movies.orEmpty() +
             effectiveRankings.take(6) +
             mboxMovies.take(6))
+          .filter(::isValidCinemaEntry)
           .distinctBy { it.id }
           .take(14)
 
       val spotlight =
-        (mboxHome?.spotlight.orEmpty() + effectiveRankings.take(3) + mboxMovies.take(3))
+        (homeSpotlight + effectiveRankings.take(3) + mboxMovies.take(3))
+          .filter(::isValidCinemaEntry)
           .distinctBy { it.id }
           .take(7)
 
@@ -182,7 +264,7 @@ class MovieCatalogRepository(
             )
           )
         }
-        mboxHome?.rails?.take(5)?.forEach { add(it) }
+        homeRails.take(5).forEach { add(it) }
         if (topItunes.isNotEmpty()) {
           add(
             MovieRail(
@@ -220,6 +302,7 @@ class MovieCatalogRepository(
           isOfflineFallback = false,
         )
       cachedHomeFeed = System.currentTimeMillis() to result
+      persistHomeSnapshot(result)
       result
     } catch (e: CancellationException) {
       throw e
@@ -239,14 +322,94 @@ class MovieCatalogRepository(
     }
   }
 
-  suspend fun loadGenreFeed(genre: String, page: Int = 1): List<Movie> {
-    val live =
-      runCatching {
-        movieBox.getMovies(page = page, perPage = 24, sort = "RECOMMEND", genre = genre) +
-          movieBox.getTvSeries(page = page, perPage = 16, sort = "RECOMMEND", genre = genre)
-      }.getOrDefault(emptyList()).distinctBy { it.id }
-    live.forEach { cache[it.id] = it }
-    return live
+  suspend fun loadGenreFeed(genre: String, page: Int = 1): List<Movie> =
+    loadCategoryCatalog(
+      category = genre,
+      mediaFilterName = "ALL",
+      sortMode = CategorySortMode.FEATURED,
+      page = page,
+    )
+
+  suspend fun loadCategoryCatalog(
+    category: String,
+    mediaFilterName: String = "ALL",
+    sortMode: CategorySortMode = CategorySortMode.FEATURED,
+    page: Int = 1,
+  ): List<Movie> = coroutineScope {
+    val cleanCategory = category.trim().ifBlank { "All" }
+    val wantAnimeOnly = mediaFilterName == "ANIME" || cleanCategory.equals("Anime", ignoreCase = true)
+    if (wantAnimeOnly) {
+      val animeSort =
+        when (sortMode) {
+          CategorySortMode.TOP_RANKED, CategorySortMode.HIGHEST_RATED -> AnimeSortMode.TOP_RANKED
+          CategorySortMode.NEWEST -> AnimeSortMode.NEWEST
+          CategorySortMode.FEATURED -> AnimeSortMode.POPULAR
+        }
+      val animeGenre =
+        if (cleanCategory.equals("All", ignoreCase = true) || cleanCategory.equals("Anime", ignoreCase = true)) {
+          "All"
+        } else {
+          cleanCategory
+        }
+      val animeResults = loadAnimeCatalog(genreLabel = animeGenre, sortMode = animeSort, page = page)
+      return@coroutineScope sortCatalogMovies(animeResults, sortMode)
+    }
+
+    val mboxSort =
+      when (sortMode) {
+        CategorySortMode.NEWEST -> "LATEST"
+        else -> "RECOMMEND"
+      }
+    val mboxGenre =
+      if (cleanCategory.equals("All", ignoreCase = true)) "ALL" else cleanCategory
+
+    val wantMovies = mediaFilterName == "ALL" || mediaFilterName == "MOVIES" || mediaFilterName == "RANKINGS"
+    val wantSeries = mediaFilterName == "ALL" || mediaFilterName == "SERIES" || mediaFilterName == "RANKINGS"
+
+    val moviesDef =
+      if (wantMovies) {
+        async {
+          withTimeoutOrNull(5000L) {
+            runCatching {
+              movieBox.getMovies(page = page, perPage = 24, sort = mboxSort, genre = mboxGenre)
+            }.getOrDefault(emptyList())
+          }.orEmpty()
+        }
+      } else null
+
+    val seriesDef =
+      if (wantSeries) {
+        async {
+          withTimeoutOrNull(5000L) {
+            runCatching {
+              movieBox.getTvSeries(page = page, perPage = 20, sort = mboxSort, genre = mboxGenre)
+            }.getOrDefault(emptyList())
+          }.orEmpty()
+        }
+      } else null
+
+    val jikanDef =
+      if (
+        (mediaFilterName == "ALL" || mediaFilterName == "RANKINGS") &&
+          JikanTvMazeService.ANIME_GENRES.any { it.label.equals(cleanCategory, ignoreCase = true) }
+      ) {
+        async {
+          withTimeoutOrNull(4500L) {
+            val animeSort =
+              if (sortMode == CategorySortMode.NEWEST) AnimeSortMode.NEWEST else AnimeSortMode.TOP_RANKED
+            runCatching { jikanTvMaze.browseAnime(cleanCategory, animeSort, page, limit = 16) }
+              .getOrDefault(emptyList())
+          }.orEmpty()
+        }
+      } else null
+
+    val combined =
+      (moviesDef?.await().orEmpty() + seriesDef?.await().orEmpty() + jikanDef?.await().orEmpty())
+        .filter(::isValidCinemaEntry)
+        .distinctBy { it.id }
+
+    combined.forEach { cache[it.id] = it }
+    sortCatalogMovies(combined, sortMode)
   }
 
   suspend fun loadAnimeCatalog(
@@ -255,37 +418,42 @@ class MovieCatalogRepository(
     page: Int = 1,
   ): List<Movie> = coroutineScope {
     val jikanDef = async {
-      runCatching { jikanTvMaze.browseAnime(genreLabel, sortMode, page, limit = 24) }
-        .getOrDefault(emptyList())
+      withTimeoutOrNull(5000L) {
+        runCatching { jikanTvMaze.browseAnime(genreLabel, sortMode, page, limit = 24) }
+          .getOrDefault(emptyList())
+      }.orEmpty()
     }
     val mboxDef = async {
-      runCatching {
-        val mboxSort =
-          when (sortMode) {
-            AnimeSortMode.NEWEST -> "LATEST"
-            AnimeSortMode.TOP_RANKED, AnimeSortMode.POPULAR -> "RECOMMEND"
-            AnimeSortMode.AIRING -> "RECOMMEND"
-          }
-        val mboxGenre =
-          if (genreLabel.equals("All", ignoreCase = true)) "Animation" else genreLabel
-        movieBox.getFilteredFeed(
-          tabId = 5,
-          page = page,
-          perPage = 18,
-          sort = mboxSort,
-          genre = mboxGenre,
-          overrideMediaType = "Anime",
-        )
-      }.getOrDefault(emptyList())
+      withTimeoutOrNull(5000L) {
+        runCatching {
+          val mboxSort =
+            when (sortMode) {
+              AnimeSortMode.NEWEST -> "LATEST"
+              AnimeSortMode.TOP_RANKED, AnimeSortMode.POPULAR -> "RECOMMEND"
+              AnimeSortMode.AIRING -> "RECOMMEND"
+            }
+          val mboxGenre =
+            if (genreLabel.equals("All", ignoreCase = true)) "Animation" else genreLabel
+          movieBox.getFilteredFeed(
+            tabId = 5,
+            page = page,
+            perPage = 20,
+            sort = mboxSort,
+            genre = mboxGenre,
+            overrideMediaType = "Anime",
+          )
+        }.getOrDefault(emptyList())
+      }.orEmpty()
     }
 
-    val jikanHits = jikanDef.await()
+    val jikanHits = jikanDef.await().filter(::isValidCinemaEntry)
     val mboxHits =
-      mboxDef.await().filter {
-        genreLabel.equals("All", ignoreCase = true) ||
-          it.genre.contains(genreLabel, ignoreCase = true) ||
-          it.country.equals("Japan", ignoreCase = true) ||
-          it.language.orEmpty().contains("Japanese", ignoreCase = true)
+      mboxDef.await().filter { m ->
+        isValidCinemaEntry(m) &&
+          (genreLabel.equals("All", ignoreCase = true) ||
+            m.genre.contains(genreLabel, ignoreCase = true) ||
+            m.country.equals("Japan", ignoreCase = true) ||
+            m.language.orEmpty().contains("Japanese", ignoreCase = true))
       }
 
     // Merge Jikan rankings with streamable MovieBox items matched by normalized title
@@ -303,7 +471,7 @@ class MovieCatalogRepository(
 
     val seenTitles = enrichedJikan.mapTo(HashSet()) { normalizeTitleKey(it.title) }
     val uniqueMbox = mboxHits.filter { seenTitles.add(normalizeTitleKey(it.title)) }
-    val merged = (enrichedJikan + uniqueMbox).distinctBy { it.id }
+    val merged = (enrichedJikan + uniqueMbox).filter(::isValidCinemaEntry).distinctBy { it.id }
     merged.forEach { cache[it.id] = it }
     merged
   }
@@ -436,7 +604,8 @@ class MovieCatalogRepository(
       val animeHits = jikanDeferred.await()
 
       val rawCombined =
-        listOfNotNull(directMovie) + mboxHits + suggestMovies + tvHits + animeHits + itunesHits
+        (listOfNotNull(directMovie) + mboxHits + suggestMovies + tvHits + animeHits + itunesHits)
+          .filter(::isValidCinemaEntry)
       // Prefer entries that already have stream subjectId or better metadata, keep distinct by normalized title+type
       val deduped =
         rawCombined
@@ -454,7 +623,8 @@ class MovieCatalogRepository(
 
       val cacheExtras =
         cache.values.filter { cached ->
-          deduped.none { normalizeTitleKey(it.title) == normalizeTitleKey(cached.title) } &&
+          isValidCinemaEntry(cached) &&
+            deduped.none { normalizeTitleKey(it.title) == normalizeTitleKey(cached.title) } &&
             matchesQueryTokens(cleanQuery, cached)
         }
       val combinedAll = (deduped + cacheExtras).distinctBy { it.id }
@@ -652,8 +822,186 @@ class MovieCatalogRepository(
       ),
     ).filter { it.movies.isNotEmpty() }
 
+  internal fun isValidCinemaEntry(movie: Movie): Boolean {
+    val typeLower = movie.mediaType.trim().lowercase()
+    if (typeLower in setOf("music", "song", "songs", "audio", "podcast", "pv", "cm", "karaoke")) {
+      return false
+    }
+    val ratingLower = movie.contentRating.trim().lowercase()
+    if (
+      ratingLower.startsWith("music") ||
+        ratingLower.startsWith("pv ") ||
+        ratingLower.startsWith("cm ") ||
+        ratingLower == "pv" ||
+        ratingLower == "cm"
+    ) {
+      return false
+    }
+    val genreTokens =
+      movie.genre.split(",", "/", "&", "|").map { it.trim().lowercase() }.filter { it.isNotBlank() }
+    val bannedGenres = setOf("music", "song", "songs", "music video", "mv", "audio", "podcast", "karaoke", "single", "ost", "soundtrack", "radio")
+    if (genreTokens.any { it in bannedGenres }) return false
+
+    val titleLower = movie.title.lowercase()
+    if (
+      titleLower.contains("(official music video)") ||
+        titleLower.contains("(official video)") ||
+        titleLower.contains("(official audio)") ||
+        titleLower.contains("(lyric video)") ||
+        titleLower.contains("[mv]") ||
+        titleLower.contains("(mv)")
+    ) {
+      return false
+    }
+    return true
+  }
+
+  fun sortCatalogMovies(movies: List<Movie>, sortMode: CategorySortMode): List<Movie> {
+    val clean = movies.filter(::isValidCinemaEntry)
+    return when (sortMode) {
+      CategorySortMode.FEATURED -> clean
+      CategorySortMode.TOP_RANKED ->
+        clean.sortedWith(
+          compareBy<Movie> { it.rankPosition ?: Int.MAX_VALUE }
+            .thenByDescending { it.imdbRating?.toDoubleOrNull() ?: 0.0 }
+            .thenByDescending { if (it.subjectId.isNotBlank()) 1 else 0 }
+        )
+      CategorySortMode.HIGHEST_RATED ->
+        clean.sortedWith(
+          compareByDescending<Movie> { it.imdbRating?.toDoubleOrNull() ?: 0.0 }
+            .thenBy { it.rankPosition ?: Int.MAX_VALUE }
+            .thenByDescending { if (it.subjectId.isNotBlank()) 1 else 0 }
+        )
+      CategorySortMode.NEWEST ->
+        clean.sortedWith(
+          compareByDescending<Movie> { it.releaseYear.toIntOrNull() ?: 0 }
+            .thenByDescending { it.releaseDateLabel }
+        )
+    }
+  }
+
+  private fun persistHomeSnapshot(feed: CatalogFeedResult) {
+    val prefs = snapshotPrefs ?: return
+    runCatching {
+      val root =
+        JSONObject().apply {
+          put("savedAt", System.currentTimeMillis())
+          put("spotlight", encodeSnapshotMovies(feed.spotlight.take(7)))
+          put("rankings", encodeSnapshotMovies(feed.rankings.take(24)))
+          put("anime", encodeSnapshotMovies(feed.anime.take(24)))
+          put("recommendations", encodeSnapshotMovies(feed.recommendations.take(14)))
+          put("allMovies", encodeSnapshotMovies(feed.allMovies.take(80)))
+          put(
+            "rails",
+            JSONArray().apply {
+              feed.rails.take(6).forEach { r ->
+                put(
+                  JSONObject().apply {
+                    put("id", r.id)
+                    put("title", r.title)
+                    put("subtitle", r.subtitle)
+                    put("movies", encodeSnapshotMovies(r.movies.take(18)))
+                  }
+                )
+              }
+            },
+          )
+          put(
+            "trendingKeywords",
+            JSONArray().apply { feed.trendingKeywords.forEach { put(it) } },
+          )
+        }
+      prefs.edit().putString(SNAPSHOT_KEY, root.toString()).apply()
+    }
+  }
+
+  private fun encodeSnapshotMovies(movies: List<Movie>): JSONArray =
+    JSONArray().apply {
+      movies.forEach { m ->
+        put(
+          JSONObject().apply {
+            put("id", m.id)
+            put("trackId", m.trackId)
+            put("title", m.title)
+            put("director", m.director)
+            put("genre", m.genre)
+            put("releaseYear", m.releaseYear)
+            put("releaseDateLabel", m.releaseDateLabel)
+            put("posterUrl", m.posterUrl)
+            put("backdropUrl", m.backdropUrl)
+            put("synopsis", m.synopsis.take(320))
+            put("runtimeMinutes", m.runtimeMinutes)
+            put("contentRating", m.contentRating)
+            put("subjectId", m.subjectId)
+            put("mediaType", m.mediaType)
+            m.imdbRating?.let { put("imdbRating", it) }
+            m.rankPosition?.let { put("rankPosition", it) }
+            m.detailPath?.let { put("detailPath", it) }
+            put("sourceProvider", m.sourceProvider)
+          }
+        )
+      }
+    }
+
+  private fun parseSnapshotMovies(arr: JSONArray?): List<Movie> {
+    if (arr == null) return emptyList()
+    return buildList {
+      for (i in 0 until arr.length()) {
+        val o = arr.optJSONObject(i) ?: continue
+        val id = o.optString("id")
+        val title = o.optString("title")
+        if (id.isBlank() || title.isBlank()) continue
+        add(
+          Movie(
+            id = id,
+            trackId = o.optLong("trackId", 0L),
+            title = title,
+            director = o.optString("director"),
+            genre = o.optString("genre"),
+            releaseYear = o.optString("releaseYear"),
+            releaseDateLabel = o.optString("releaseDateLabel"),
+            posterUrl = o.optString("posterUrl"),
+            backdropUrl = o.optString("backdropUrl"),
+            previewUrl = null,
+            synopsis = o.optString("synopsis"),
+            runtimeMinutes = o.optInt("runtimeMinutes", 0),
+            contentRating = o.optString("contentRating"),
+            subjectId = o.optString("subjectId"),
+            mediaType = o.optString("mediaType", "Movie"),
+            imdbRating = o.optString("imdbRating").takeIf { it.isNotBlank() && it != "null" },
+            detailPath = o.optString("detailPath").takeIf { it.isNotBlank() && it != "null" },
+            sourceProvider = o.optString("sourceProvider", "Decan"),
+            rankPosition = o.optInt("rankPosition", 0).takeIf { it > 0 },
+          )
+        )
+      }
+    }
+  }
+
+  private fun parseSnapshotRails(arr: JSONArray?): List<MovieRail> {
+    if (arr == null) return emptyList()
+    return buildList {
+      for (i in 0 until arr.length()) {
+        val o = arr.optJSONObject(i) ?: continue
+        val movies = parseSnapshotMovies(o.optJSONArray("movies")).filter(::isValidCinemaEntry)
+        if (movies.isNotEmpty()) {
+          add(
+            MovieRail(
+              id = o.optString("id"),
+              title = o.optString("title"),
+              subtitle = o.optString("subtitle"),
+              movies = movies,
+            )
+          )
+        }
+      }
+    }
+  }
+
   companion object {
     private const val BASE_URL = "https://itunes.apple.com/"
+    private const val SNAPSHOT_KEY = "catalog_home_snapshot_v2"
+    private const val SNAPSHOT_MAX_AGE_MS = 12 * 3600_000L
     private const val HOME_CACHE_TTL_MS = 5 * 60_000L
     private const val DETAIL_CACHE_TTL_MS = 5 * 60_000L
     private const val STREAM_CACHE_TTL_MS = 3 * 60_000L

@@ -401,7 +401,7 @@ fun SettingsScreen(
                 }
 
                 val preferredApkUrl =
-                  latest.assets.firstOrNull { it.name.endsWith(".apk", ignoreCase = true) }?.downloadUrl
+                  selectCompatibleApkAsset(latest.assets)?.downloadUrl
                 if (latest.assets.isNotEmpty()) {
                   val assetNames =
                     latest.assets.joinToString(", ") { "${it.name} (${it.sizeMb} MB)" }
@@ -492,8 +492,7 @@ fun SettingsScreen(
               color = MaterialTheme.colorScheme.onSurface,
             )
             updateState.recentReleases.take(4).forEach { rel ->
-              val relApkUrl =
-                rel.assets.firstOrNull { it.name.endsWith(".apk", ignoreCase = true) }?.downloadUrl
+              val relApkUrl = selectCompatibleApkAsset(rel.assets)?.downloadUrl
               Row(
                 modifier =
                   Modifier.fillMaxWidth()
@@ -816,5 +815,17 @@ private fun SettingToggleRow(
       )
     }
     Switch(checked = checked, onCheckedChange = onCheckedChange)
+  }
+}
+
+private fun selectCompatibleApkAsset(
+  assets: List<com.example.data.remote.GitHubReleaseAsset>,
+): com.example.data.remote.GitHubReleaseAsset? {
+  val apks = assets.filter { it.name.endsWith(".apk", ignoreCase = true) }
+  if (apks.isEmpty()) return null
+  return if (BuildConfig.DEBUG) {
+    apks.firstOrNull { !it.name.contains("release", ignoreCase = true) } ?: apks.first()
+  } else {
+    apks.firstOrNull { !it.name.contains("debug", ignoreCase = true) } ?: apks.first()
   }
 }

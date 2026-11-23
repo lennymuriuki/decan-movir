@@ -5,9 +5,12 @@ import android.media.MediaPlayer
 import android.net.Uri
 import android.widget.VideoView
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -59,6 +62,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -127,16 +131,33 @@ fun MoviePosterCard(
   onClick: () -> Unit,
   onToggleWatchlist: () -> Unit,
   rankOverride: Int? = null,
+  compact: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
+  val interactionSource = remember { MutableInteractionSource() }
+  val isPressed by interactionSource.collectIsPressedAsState()
+  val pressScale by animateFloatAsState(
+    targetValue = if (isPressed) 0.96f else 1f,
+    label = "card_press_scale",
+  )
+
   Column(
     modifier =
       modifier
+        .graphicsLayer {
+          scaleX = pressScale
+          scaleY = pressScale
+        }
         .clip(MaterialTheme.shapes.medium)
-        .clickable(onClick = onClick)
+        .clickable(
+          interactionSource = interactionSource,
+          indication = androidx.compose.material3.ripple(),
+          onClick = onClick,
+        )
         .testTag("movie_card_${movie.id}"),
-    verticalArrangement = Arrangement.spacedBy(8.dp),
+    verticalArrangement = Arrangement.spacedBy(if (compact) 5.dp else 8.dp),
   ) {
+    val badgePadding = if (compact) 5.dp else 8.dp
     Box(
       modifier =
         Modifier.fillMaxWidth()
@@ -153,7 +174,7 @@ fun MoviePosterCard(
       Box(
         modifier =
           Modifier.fillMaxWidth()
-            .height(68.dp)
+            .height(if (compact) 54.dp else 68.dp)
             .align(Alignment.BottomCenter)
             .background(
               Brush.verticalGradient(
@@ -168,14 +189,14 @@ fun MoviePosterCard(
           IconButtonDefaults.filledTonalIconButtonColors(
             containerColor =
               if (savedEntry != null) MaterialTheme.colorScheme.primary
-              else Color.Black.copy(alpha = 0.55f),
+              else Color.Black.copy(alpha = 0.58f),
             contentColor =
               if (savedEntry != null) MaterialTheme.colorScheme.onPrimary else Color.White,
           ),
         modifier =
           Modifier.align(Alignment.TopEnd)
-            .padding(6.dp)
-            .size(36.dp)
+            .padding(badgePadding)
+            .size(if (compact) 30.dp else 36.dp)
             .minimumInteractiveComponentSize()
             .testTag("quick_watchlist_${movie.id}"),
       ) {
@@ -188,7 +209,7 @@ fun MoviePosterCard(
             },
           contentDescription =
             if (savedEntry != null) "Saved in library" else "Add to watchlist",
-          modifier = Modifier.size(18.dp),
+          modifier = Modifier.size(if (compact) 15.dp else 18.dp),
         )
       }
 
@@ -197,9 +218,9 @@ fun MoviePosterCard(
         Surface(
           color =
             if (displayRank <= 3) MaterialTheme.colorScheme.primary
-            else Color.Black.copy(alpha = 0.82f),
+            else Color.Black.copy(alpha = 0.84f),
           shape = MaterialTheme.shapes.small,
-          modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+          modifier = Modifier.align(Alignment.TopStart).padding(badgePadding),
         ) {
           Text(
             text = "#$displayRank",
@@ -207,51 +228,51 @@ fun MoviePosterCard(
             color =
               if (displayRank <= 3) MaterialTheme.colorScheme.onPrimary
               else MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+            modifier = Modifier.padding(horizontal = if (compact) 5.dp else 7.dp, vertical = 2.dp),
           )
         }
       } else if (savedEntry?.favorite == true) {
         Surface(
           color = MaterialTheme.colorScheme.secondary,
           shape = CircleShape,
-          modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+          modifier = Modifier.align(Alignment.TopStart).padding(badgePadding),
         ) {
           Icon(
             imageVector = Icons.Filled.Favorite,
             contentDescription = "Favorite",
             tint = Color.White,
-            modifier = Modifier.padding(5.dp).size(12.dp),
+            modifier = Modifier.padding(4.dp).size(11.dp),
           )
         }
       } else if (!movie.imdbRating.isNullOrBlank()) {
         Surface(
-          color = Color.Black.copy(alpha = 0.72f),
+          color = Color.Black.copy(alpha = 0.76f),
           shape = MaterialTheme.shapes.extraSmall,
-          modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+          modifier = Modifier.align(Alignment.TopStart).padding(badgePadding),
         ) {
           Text(
             text = "★ ${movie.imdbRating}",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
           )
         }
       }
 
       Row(
-        modifier = Modifier.align(Alignment.BottomStart).padding(8.dp),
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        modifier = Modifier.align(Alignment.BottomStart).padding(badgePadding),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
         Surface(
-          color = Color.Black.copy(alpha = 0.65f),
+          color = Color.Black.copy(alpha = 0.68f),
           shape = MaterialTheme.shapes.extraSmall,
         ) {
           Text(
             text = movie.releaseYear,
             style = MaterialTheme.typography.labelSmall,
             color = Color.White,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+            modifier = Modifier.padding(horizontal = if (compact) 4.dp else 6.dp, vertical = 2.dp),
           )
         }
         if (movie.mediaType.equals("Anime", ignoreCase = true)) {
@@ -263,7 +284,7 @@ fun MoviePosterCard(
               text = "ANIME",
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.onSecondary,
-              modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+              modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
             )
           }
         } else if (movie.mediaType.equals("Series", ignoreCase = true)) {
@@ -275,7 +296,7 @@ fun MoviePosterCard(
               text = "SERIES",
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.onTertiary,
-              modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+              modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
             )
           }
         } else if (movie.subjectId.isNotBlank()) {
@@ -287,10 +308,10 @@ fun MoviePosterCard(
               text = "HD",
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.onPrimary,
-              modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+              modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
             )
           }
-        } else if (movie.previewUrl != null) {
+        } else if (!compact && movie.previewUrl != null) {
           Surface(
             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
             shape = MaterialTheme.shapes.extraSmall,
@@ -299,24 +320,26 @@ fun MoviePosterCard(
               text = "TRAILER",
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.onPrimary,
-              modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+              modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
             )
           }
         }
       }
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(if (compact) 1.dp else 2.dp)) {
       Text(
         text = movie.title,
-        style = MaterialTheme.typography.titleSmall,
+        style =
+          if (compact) MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold)
+          else MaterialTheme.typography.titleSmall,
         color = MaterialTheme.colorScheme.onBackground,
-        maxLines = 2,
+        maxLines = if (compact) 1 else 2,
         overflow = TextOverflow.Ellipsis,
       )
       Text(
         text = movie.genre,
-        style = MaterialTheme.typography.bodySmall,
+        style = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
@@ -338,7 +361,7 @@ fun HeroSpotlightCard(
     onClick = onOpenDetail,
     shape = MaterialTheme.shapes.extraLarge,
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-    modifier = modifier.fillMaxWidth().height(380.dp).testTag("hero_spotlight_${movie.id}"),
+    modifier = modifier.fillMaxWidth().height(268.dp).testTag("hero_spotlight_${movie.id}"),
   ) {
     Box(modifier = Modifier.fillMaxSize()) {
       MoviePosterImage(
@@ -354,8 +377,8 @@ fun HeroSpotlightCard(
               Brush.verticalGradient(
                 colors =
                   listOf(
-                    Color.Black.copy(alpha = 0.12f),
-                    Color.Black.copy(alpha = 0.55f),
+                    Color.Black.copy(alpha = 0.14f),
+                    Color.Black.copy(alpha = 0.56f),
                     MaterialTheme.colorScheme.background.copy(alpha = 0.96f),
                   )
               )
@@ -365,30 +388,33 @@ fun HeroSpotlightCard(
       Surface(
         color = MaterialTheme.colorScheme.primary,
         shape = MaterialTheme.shapes.small,
-        modifier = Modifier.align(Alignment.TopStart).padding(16.dp),
+        modifier = Modifier.align(Alignment.TopStart).padding(14.dp),
       ) {
         Text(
           text =
-            if (movie.mediaType.equals("Series", ignoreCase = true)) "FEATURED SERIES"
-            else "FEATURED SPOTLIGHT",
+            when {
+              movie.mediaType.equals("Anime", ignoreCase = true) -> "FEATURED ANIME"
+              movie.mediaType.equals("Series", ignoreCase = true) -> "FEATURED SERIES"
+              else -> "FEATURED SPOTLIGHT"
+            },
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onPrimary,
-          modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+          modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
         )
       }
 
       Column(
-        modifier = Modifier.align(Alignment.BottomStart).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
       ) {
         Row(
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {
           MetadataChip(text = movie.genre)
           MetadataChip(text = movie.releaseYear)
           if (!movie.imdbRating.isNullOrBlank()) {
-            MetadataChip(text = "IMDb ${movie.imdbRating}")
+            MetadataChip(text = "★ ${movie.imdbRating}")
           } else if (movie.runtimeMinutes > 0) {
             MetadataChip(text = "${movie.runtimeMinutes}m")
           }
@@ -396,17 +422,17 @@ fun HeroSpotlightCard(
 
         Text(
           text = movie.title,
-          style = MaterialTheme.typography.displaySmall,
+          style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
           color = Color.White,
-          maxLines = 2,
+          maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
 
         Text(
           text = movie.synopsis,
-          style = MaterialTheme.typography.bodyMedium,
+          style = MaterialTheme.typography.bodySmall,
           color = Color.White.copy(alpha = 0.82f),
-          maxLines = 2,
+          maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
 

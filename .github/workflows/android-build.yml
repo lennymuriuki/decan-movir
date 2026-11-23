@@ -57,7 +57,9 @@ jobs:
           fi
 
       - name: Build Debug APK
-        run: gradle :app:assembleDebug --no-daemon
+        run: |
+          NEXT_CODE=$((100 + ${{ github.run_number }}))
+          gradle :app:assembleDebug --no-daemon -PappVersionCode="${NEXT_CODE}" -PappVersionName="1.0.${{ github.run_number }}"
 
       - name: Run Unit Tests
         run: gradle :app:testDebugUnitTest --no-daemon
