@@ -1,23 +1,20 @@
 name: Decan Movie Windows Desktop Release
 
 on:
+  workflow_dispatch:
+
   push:
     tags:
-      - 'v*'
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Windows desktop version (for example 1.0.4)'
-        required: true
-        default: '1.0.4'
+      - "v*"
 
 permissions:
   contents: write
 
 jobs:
   build-windows:
-    name: Build Windows EXE and ZIP
+    name: Build Decan Movie Windows
     runs-on: windows-latest
+
     defaults:
       run:
         working-directory: desktop
@@ -26,45 +23,42 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Resolve desktop version
-        shell: pwsh
-        run: |
-          if ('${{ github.event_name }}' -eq 'push') {
-            $version = '${{ github.ref_name }}'.TrimStart('v')
-          } else {
-            $version = '${{ inputs.version }}'
-          }
-          npm pkg set version=$version
-          "DESKTOP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
 
-      - name: Install desktop dependencies
-        run: npm install --no-audit --no-fund
+      - name: Install dependencies
+        run: npm install
 
       - name: Validate desktop source
         run: npm run check
 
-      - name: Build Windows installer, portable EXE and ZIP
+      - name: Build Windows installer, portable and ZIP
         run: npm run dist:win
-        env:
-          GH_TOKEN: ${{ github.token }}
 
       - name: Generate SHA-256 checksums
-        shell: pwsh
+        shell: powershell
         run: |
-          Get-ChildItem release -File | ForEach-Object {
-            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
-            "$hash  $($_.Name)"
-          } | Out-File release/checksums-sha256.txt -Encoding ascii
+          $files = Get-ChildItem -Path release -File
+
+          $output = @()
+
+          foreach ($file in $files) {
+            $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower()
+            $output += "$hash  $($file.Name)"
+          }
+
+          $output | Out-File `
+            -FilePath release/checksums-sha256.txt `
+            -Encoding utf8
 
       - name: Upload Windows build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: decan-movie-windows-${{ env.DESKTOP_VERSION }}
+          name: Decan-Movie-Windows
           path: |
             desktop/release/*.exe
             desktop/release/*.zip
@@ -72,27 +66,18 @@ jobs:
             desktop/release/*.blockmap
             desktop/release/checksums-sha256.txt
           if-no-files-found: error
-          retention-days: 30
-
-      - name: Ensure GitHub Release exists
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $tag = if ('${{ github.event_name }}' -eq 'push') { '${{ github.ref_name }}' } else { "v$env:DESKTOP_VERSION" }
-          gh release view $tag --repo '${{ github.repository }}' *> $null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --repo '${{ github.repository }}' --title "Decan Movie $tag" --notes "Decan Movie Windows desktop release. Existing Android release assets are preserved."
-          }
-          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Upload Windows assets to GitHub Release
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-        shell: pwsh
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            desktop/release/*.exe
+            desktop/release/*.zip
+            desktop/release/*.yml
+            desktop/release/*.blockmap
+            desktop/release/checksums-sha256.txt
+          generate_release_notes: true
+          fail_on_unmatched_files: true
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          Get-ChildItem release -File | ForEach-Object {
-            gh release upload $env:RELEASE_TAG $_.FullName --repo '${{ github.repository }}' --clobber
-          }
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
