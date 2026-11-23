@@ -372,6 +372,7 @@ class MovieBoxEngine(
         listOf(
           "$API_BASE/subject/search",
           "https://moviebox.ph/wefeed-h5api-bff/subject/search",
+          "https://moviebox.ng/wefeed-h5api-bff/subject/search",
         )
       for (url in endpoints) {
         val parsed =
@@ -447,6 +448,7 @@ class MovieBoxEngine(
         listOf(
           "$API_BASE/subject/search-suggest",
           "https://moviebox.ph/wefeed-h5api-bff/subject/search-suggest",
+          "https://moviebox.ng/wefeed-h5api-bff/subject/search-suggest",
         )
       for (url in endpoints) {
         val parsed =
@@ -957,10 +959,11 @@ class MovieBoxEngine(
 
     fun createDefaultClient(): OkHttpClient =
       OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(9, TimeUnit.SECONDS)
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(14, TimeUnit.SECONDS)
         .connectionPool(ConnectionPool(8, 5, TimeUnit.MINUTES))
         .followRedirects(true)
+        .retryOnConnectionFailure(true)
         .build()
   }
 }

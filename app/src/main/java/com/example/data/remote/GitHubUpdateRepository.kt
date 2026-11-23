@@ -1,6 +1,8 @@
 package com.example.data.remote
 
 import androidx.compose.runtime.Immutable
+import java.io.File
+import java.io.FileOutputStream
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -8,6 +10,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
+import org.xmlpull.v1.XmlPullParser
+import org.xmlpull.v1.XmlPullParserFactory
 
 @Immutable
 data class GitHubReleaseAsset(
@@ -31,8 +35,9 @@ data class GitHubReleaseInfo(
 class GitHubUpdateRepository(
   private val client: OkHttpClient =
     OkHttpClient.Builder()
-      .connectTimeout(10, TimeUnit.SECONDS)
-      .readTimeout(15, TimeUnit.SECONDS)
+      .connectTimeout(12, TimeUnit.SECONDS)
+      .readTimeout(20, TimeUnit.SECONDS)
+      .followRedirects(true)
       .build(),
 ) {
   suspend fun checkLatestRelease(
@@ -51,16 +56,21 @@ class GitHubUpdateRepository(
             .addHeader("User-Agent", "DecanMovie-Android")
             .build()
 
-        client.newCall(latestReq).execute().use { resp ->
-          if (resp.code == 404) {
-            return@runCatching fetchFallbackRelease(cleanSlug, currentVersion)
-          }
-          if (!resp.isSuccessful) {
-            throw IllegalStateException("Updates unavailable right now")
-          }
-          val obj = JSONObject(resp.body?.string().orEmpty())
-          parseRelease(obj, currentVersion)
-        }
+        val apiResult =
+          runCatching {
+            client.newCall(latestReq).execute().use { resp ->
+              when {
+                resp.isSuccessful -> parseRelease(JSONObject(resp.body?.string().orEmpty()), currentVersion)
+                resp.code == 404 -> fetchFallbackRelease(cleanSlug, currentVersion)
+                else -> null
+              }
+            }
+          }.getOrNull()
+
+        if (apiResult != null) return@runCatching apiResult
+
+        // Fallback to Atom feed (not subject to GitHub REST API 60 req/hr unauthenticated limit)
+        fetchReleasesAtom(cleanSlug, currentVersion).firstOrNull()
       }
     }
 
@@ -74,22 +84,68 @@ class GitHubUpdateRepository(
         require(cleanSlug.contains("/")) { "Updates unavailable right now" }
         val req =
           Request.Builder()
-            .url("https://api.github.com/repos/$cleanSlug/releases?per_page=6")
+            .url("https://api.github.com/repos/$cleanSlug/releases?per_page=8")
             .addHeader("Accept", "application/vnd.github+json")
             .addHeader("User-Agent", "DecanMovie-Android")
             .build()
 
+        val apiList =
+          runCatching {
+            client.newCall(req).execute().use { resp ->
+              if (!resp.isSuccessful) return@use null
+              val arr = JSONArray(resp.body?.string().orEmpty())
+              buildList<GitHubReleaseInfo> {
+                for (i in 0 until arr.length()) {
+                  arr.optJSONObject(i)?.let { add(parseRelease(it, currentVersion)) }
+                }
+              }
+            }
+          }.getOrNull()
+
+        if (apiList != null && apiList.isNotEmpty()) return@runCatching apiList
+
+        fetchReleasesAtom(cleanSlug, currentVersion)
+      }
+    }
+
+  suspend fun downloadApkToFile(
+    apkUrl: String,
+    destFile: File,
+    onProgress: (Float) -> Unit,
+  ): Result<File> =
+    withContext(Dispatchers.IO) {
+      runCatching {
+        destFile.parentFile?.mkdirs()
+        if (destFile.exists()) destFile.delete()
+        val req =
+          Request.Builder()
+            .url(apkUrl)
+            .addHeader("User-Agent", "DecanMovie-Android")
+            .build()
         client.newCall(req).execute().use { resp ->
-          if (resp.code == 404) return@runCatching emptyList()
           if (!resp.isSuccessful) {
-            throw IllegalStateException("Updates unavailable right now")
+            throw IllegalStateException("Update package download failed (HTTP ${resp.code})")
           }
-          val arr = JSONArray(resp.body?.string().orEmpty())
-          buildList {
-            for (i in 0 until arr.length()) {
-              arr.optJSONObject(i)?.let { add(parseRelease(it, currentVersion)) }
+          val body = resp.body ?: throw IllegalStateException("Empty update package")
+          val totalBytes = body.contentLength()
+          var copied = 0L
+          val buffer = ByteArray(16 * 1024)
+          body.byteStream().use { input ->
+            FileOutputStream(destFile).use { output ->
+              while (true) {
+                val read = input.read(buffer)
+                if (read <= 0) break
+                output.write(buffer, 0, read)
+                copied += read
+                if (totalBytes > 0L) {
+                  onProgress((copied.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f))
+                }
+              }
+              output.flush()
             }
           }
+          onProgress(1f)
+          destFile
         }
       }
     }
@@ -100,7 +156,7 @@ class GitHubUpdateRepository(
   ): GitHubReleaseInfo? {
     val req =
       Request.Builder()
-        .url("https://api.github.com/repos/$cleanSlug/releases?per_page=1")
+        .url("https://api.github.com/repos/$cleanSlug/releases?per_page=3")
         .addHeader("Accept", "application/vnd.github+json")
         .addHeader("User-Agent", "DecanMovie-Android")
         .build()
@@ -110,6 +166,112 @@ class GitHubUpdateRepository(
       val first = arr.optJSONObject(0) ?: return null
       return parseRelease(first, currentVersion)
     }
+  }
+
+  private fun fetchReleasesAtom(
+    cleanSlug: String,
+    currentVersion: String,
+  ): List<GitHubReleaseInfo> {
+    val req =
+      Request.Builder()
+        .url("https://github.com/$cleanSlug/releases.atom")
+        .addHeader("User-Agent", "DecanMovie-Android")
+        .build()
+    return runCatching {
+      client.newCall(req).execute().use { resp ->
+        if (!resp.isSuccessful) return@use emptyList()
+        val xml = resp.body?.string().orEmpty()
+        parseAtomXml(xml, cleanSlug, currentVersion)
+      }
+    }.getOrDefault(emptyList())
+  }
+
+  internal fun parseAtomXml(
+    xml: String,
+    cleanSlug: String,
+    currentVersion: String,
+  ): List<GitHubReleaseInfo> {
+    if (xml.isBlank()) return emptyList()
+    return runCatching {
+      val factory = XmlPullParserFactory.newInstance()
+      val parser = factory.newPullParser()
+      parser.setInput(xml.reader())
+
+      val list = mutableListOf<GitHubReleaseInfo>()
+      var insideEntry = false
+      var currentTag = ""
+      var title = ""
+      var linkHref = ""
+      var updated = ""
+      var content = ""
+
+      var event = parser.eventType
+      while (event != XmlPullParser.END_DOCUMENT) {
+        when (event) {
+          XmlPullParser.START_TAG -> {
+            currentTag = parser.name.orEmpty()
+            if (currentTag == "entry") {
+              insideEntry = true
+              title = ""
+              linkHref = ""
+              updated = ""
+              content = ""
+            } else if (insideEntry && currentTag == "link") {
+              val href = parser.getAttributeValue(null, "href").orEmpty()
+              if (href.isNotBlank()) linkHref = href
+            }
+          }
+          XmlPullParser.TEXT -> {
+            if (insideEntry) {
+              when (currentTag) {
+                "title" -> title += parser.text
+                "updated" -> updated += parser.text
+                "content" -> content += parser.text
+              }
+            }
+          }
+          XmlPullParser.END_TAG -> {
+            val endName = parser.name.orEmpty()
+            if (endName == "entry" && insideEntry) {
+              insideEntry = false
+              val tagFromUrl = linkHref.substringAfterLast("/").trim()
+              val tagName =
+                tagFromUrl.takeIf { it.isNotBlank() }
+                  ?: title.trim().split(" ").firstOrNull().orEmpty().ifBlank { "v1.0" }
+              val cleanText =
+                content.replace(Regex("<[^>]*>"), " ").replace(Regex("\\s+"), " ").trim()
+              val guessedApkUrl =
+                "https://github.com/$cleanSlug/releases/download/$tagName/decan-movie-$tagName-debug.apk"
+              list.add(
+                GitHubReleaseInfo(
+                  tagName = tagName,
+                  title = title.trim().ifBlank { tagName },
+                  changelog = cleanText.ifBlank { "New Decan Movie update available." },
+                  publishedAt = updated.take(10),
+                  htmlUrl =
+                    linkHref.ifBlank { "https://github.com/$cleanSlug/releases/tag/$tagName" },
+                  isPrerelease = tagName.contains("beta", ignoreCase = true) ||
+                    tagName.contains("rc", ignoreCase = true),
+                  assets =
+                    listOf(
+                      GitHubReleaseAsset(
+                        name = "decan-movie-$tagName.apk",
+                        downloadUrl = guessedApkUrl,
+                        sizeMb = 0.0,
+                      )
+                    ),
+                  isNewerThanCurrent =
+                    isNewerVersion(remoteTag = tagName, currentVersion = currentVersion),
+                )
+              )
+            }
+            currentTag = ""
+          }
+        }
+        event = parser.next()
+      }
+      list
+    }.getOrDefault(emptyList())
   }
 
   private fun parseRelease(obj: JSONObject, currentVersion: String): GitHubReleaseInfo {

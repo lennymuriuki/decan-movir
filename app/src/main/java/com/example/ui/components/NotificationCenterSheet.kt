@@ -1,16 +1,18 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -19,8 +21,10 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.DownloadDone
+import androidx.compose.material.icons.filled.LocalMovies
 import androidx.compose.material.icons.filled.NewReleases
 import androidx.compose.material.icons.filled.NotificationsNone
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -31,7 +35,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -71,7 +74,7 @@ fun NotificationCenterSheet(
       ) {
         Column(modifier = Modifier.weight(1f)) {
           Text(
-            text = "Notifications",
+            text = "Notifications & Cinema News",
             style = MaterialTheme.typography.headlineSmall,
             color = MaterialTheme.colorScheme.onSurface,
           )
@@ -79,7 +82,7 @@ fun NotificationCenterSheet(
           Text(
             text =
               if (unreadCount > 0) "$unreadCount unread alert(s)"
-              else "Downloads, app updates & trending picks",
+              else "Movie drops, offline folders & app updates",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -139,7 +142,7 @@ fun NotificationCenterSheet(
               color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
-              text = "Download completions, app updates, and trending picks will appear here.",
+              text = "Poster previews for new drops, folder downloads, and updates will appear here.",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -147,7 +150,7 @@ fun NotificationCenterSheet(
         }
       } else {
         LazyColumn(
-          modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp),
+          modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp),
           contentPadding = PaddingValues(vertical = 4.dp),
           verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -158,6 +161,14 @@ fun NotificationCenterSheet(
                 NotificationCategory.RELEASE -> Icons.Filled.NewReleases
                 NotificationCategory.TRENDING -> Icons.Filled.TrendingUp
               }
+            val defaultCta =
+              when (item.category) {
+                NotificationCategory.DOWNLOAD -> "Open"
+                NotificationCategory.RELEASE -> "Update"
+                NotificationCategory.TRENDING -> "Watch"
+              }
+            val ctaText = item.actionLabel ?: defaultCta
+
             Card(
               colors =
                 CardDefaults.cardColors(
@@ -177,28 +188,80 @@ fun NotificationCenterSheet(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
               ) {
-                Surface(
-                  color = MaterialTheme.colorScheme.primaryContainer,
-                  shape = CircleShape,
-                  modifier = Modifier.size(38.dp),
-                ) {
-                  Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                      imageVector = icon,
-                      contentDescription = item.category.label,
-                      tint = MaterialTheme.colorScheme.primary,
-                      modifier = Modifier.size(20.dp),
+                if (!item.imageUrl.isNullOrBlank()) {
+                  Box(
+                    modifier =
+                      Modifier.width(56.dp)
+                        .height(80.dp)
+                        .clip(MaterialTheme.shapes.small)
+                  ) {
+                    MoviePosterImage(
+                      imageUrl = item.imageUrl,
+                      contentDescription = item.title,
+                      modifier = Modifier.fillMaxWidth().height(80.dp),
                     )
+                    Surface(
+                      color = MaterialTheme.colorScheme.primary,
+                      shape = CircleShape,
+                      modifier = Modifier.align(Alignment.TopStart).padding(4.dp).size(20.dp),
+                    ) {
+                      Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                          imageVector = Icons.Filled.LocalMovies,
+                          contentDescription = "Decan Movie",
+                          tint = MaterialTheme.colorScheme.onPrimary,
+                          modifier = Modifier.size(12.dp),
+                        )
+                      }
+                    }
+                  }
+                } else {
+                  Box(modifier = Modifier.size(48.dp)) {
+                    Surface(
+                      color = MaterialTheme.colorScheme.primaryContainer,
+                      shape = MaterialTheme.shapes.medium,
+                      modifier = Modifier.size(46.dp),
+                    ) {
+                      Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                          imageVector = icon,
+                          contentDescription = item.category.label,
+                          tint = MaterialTheme.colorScheme.primary,
+                          modifier = Modifier.size(22.dp),
+                        )
+                      }
+                    }
+                    Surface(
+                      color = MaterialTheme.colorScheme.primary,
+                      shape = CircleShape,
+                      modifier =
+                        Modifier.align(Alignment.BottomEnd)
+                          .size(18.dp)
+                          .background(MaterialTheme.colorScheme.surface, CircleShape),
+                    ) {
+                      Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                          imageVector = Icons.Filled.LocalMovies,
+                          contentDescription = "Decan Movie",
+                          tint = MaterialTheme.colorScheme.onPrimary,
+                          modifier = Modifier.size(11.dp),
+                        )
+                      }
+                    }
                   }
                 }
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+
+                Column(
+                  modifier = Modifier.weight(1f),
+                  verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
                   Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                   ) {
                     Text(
-                      text = item.category.label.uppercase(),
+                      text = "DECAN • ${item.category.label.uppercase()}",
                       style = MaterialTheme.typography.labelSmall,
                       color = MaterialTheme.colorScheme.primary,
                     )
@@ -224,6 +287,33 @@ fun NotificationCenterSheet(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                   )
+                  Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                  ) {
+                    Surface(
+                      color = MaterialTheme.colorScheme.primaryContainer,
+                      shape = MaterialTheme.shapes.small,
+                    ) {
+                      Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                      ) {
+                        Icon(
+                          imageVector = Icons.Filled.PlayArrow,
+                          contentDescription = null,
+                          tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                          modifier = Modifier.size(12.dp),
+                        )
+                        Text(
+                          text = ctaText,
+                          style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                          color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                      }
+                    }
+                  }
                 }
               }
             }

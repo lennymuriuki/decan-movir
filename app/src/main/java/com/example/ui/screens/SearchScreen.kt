@@ -91,7 +91,7 @@ fun SearchScreen(
     remember(uiState.results, uiState.selectedGenre, uiState.sortOption) {
       val genreFiltered =
         if (uiState.selectedGenre == "All") uiState.results
-        else uiState.results.filter { it.genre.equals(uiState.selectedGenre, ignoreCase = true) }
+        else uiState.results.filter { it.genre.contains(uiState.selectedGenre, ignoreCase = true) }
 
       when (uiState.sortOption) {
         MovieSortOption.FEATURED -> genreFiltered
@@ -253,8 +253,14 @@ fun SearchScreen(
       }
     }
 
+    if (uiState.isLoading) {
+      androidx.compose.material3.LinearProgressIndicator(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+      )
+    }
+
     when {
-      uiState.isLoading -> {
+      uiState.isLoading && displayedMovies.isEmpty() -> {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
           CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
         }

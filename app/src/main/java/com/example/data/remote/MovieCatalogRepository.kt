@@ -35,6 +35,7 @@ data class CatalogFeedResult(
 class MovieCatalogRepository(
   private val api: ItunesMovieApi = createDefaultApi(),
   private val movieBox: MovieBoxEngine = MovieBoxEngine(),
+  private val jikanTvMaze: JikanTvMazeService = JikanTvMazeService(),
 ) {
   private val cache = ConcurrentHashMap<String, Movie>()
   @Volatile private var cachedHomeFeed: Pair<Long, CatalogFeedResult>? = null
@@ -248,15 +249,102 @@ class MovieCatalogRepository(
     return live
   }
 
+  suspend fun loadAnimeCatalog(
+    genreLabel: String = "All",
+    sortMode: AnimeSortMode = AnimeSortMode.TOP_RANKED,
+    page: Int = 1,
+  ): List<Movie> = coroutineScope {
+    val jikanDef = async {
+      runCatching { jikanTvMaze.browseAnime(genreLabel, sortMode, page, limit = 24) }
+        .getOrDefault(emptyList())
+    }
+    val mboxDef = async {
+      runCatching {
+        val mboxSort =
+          when (sortMode) {
+            AnimeSortMode.NEWEST -> "LATEST"
+            AnimeSortMode.TOP_RANKED, AnimeSortMode.POPULAR -> "RECOMMEND"
+            AnimeSortMode.AIRING -> "RECOMMEND"
+          }
+        val mboxGenre =
+          if (genreLabel.equals("All", ignoreCase = true)) "Animation" else genreLabel
+        movieBox.getFilteredFeed(
+          tabId = 5,
+          page = page,
+          perPage = 18,
+          sort = mboxSort,
+          genre = mboxGenre,
+          overrideMediaType = "Anime",
+        )
+      }.getOrDefault(emptyList())
+    }
+
+    val jikanHits = jikanDef.await()
+    val mboxHits =
+      mboxDef.await().filter {
+        genreLabel.equals("All", ignoreCase = true) ||
+          it.genre.contains(genreLabel, ignoreCase = true) ||
+          it.country.equals("Japan", ignoreCase = true) ||
+          it.language.orEmpty().contains("Japanese", ignoreCase = true)
+      }
+
+    // Merge Jikan rankings with streamable MovieBox items matched by normalized title
+    val mboxByTitle = mboxHits.associateBy { normalizeTitleKey(it.title) }
+    val enrichedJikan =
+      jikanHits.map { anime ->
+        val streamMatch = mboxByTitle[normalizeTitleKey(anime.title)]
+        if (streamMatch != null) {
+          anime.copy(
+            subjectId = streamMatch.subjectId,
+            detailPath = streamMatch.detailPath,
+          )
+        } else anime
+      }
+
+    val seenTitles = enrichedJikan.mapTo(HashSet()) { normalizeTitleKey(it.title) }
+    val uniqueMbox = mboxHits.filter { seenTitles.add(normalizeTitleKey(it.title)) }
+    val merged = (enrichedJikan + uniqueMbox).distinctBy { it.id }
+    merged.forEach { cache[it.id] = it }
+    merged
+  }
+
   suspend fun loadMorePage(isSeries: Boolean, isAnime: Boolean, page: Int): List<Movie> {
     val fetched =
       when {
-        isAnime -> runCatching { movieBox.getAnime(page = page, perPage = 24) }.getOrDefault(emptyList())
+        isAnime -> loadAnimeCatalog(genreLabel = "All", sortMode = AnimeSortMode.TOP_RANKED, page = page)
         isSeries -> runCatching { movieBox.getTvSeries(page = page, perPage = 24) }.getOrDefault(emptyList())
         else -> runCatching { movieBox.getMovies(page = page, perPage = 24) }.getOrDefault(emptyList())
       }
     fetched.forEach { cache[it.id] = it }
     return fetched
+  }
+
+  suspend fun resolvePlayableSubject(movie: Movie): Movie? {
+    if (movie.subjectId.isNotBlank()) return movie
+    val cacheHit = cache[movie.id]
+    if (cacheHit != null && cacheHit.subjectId.isNotBlank()) return cacheHit
+
+    val targetNorm = normalizeTitleKey(movie.title)
+    val candidates =
+      runCatching { movieBox.search(movie.title, page = 1, perPage = 10) }.getOrDefault(emptyList()) +
+        runCatching { movieBox.searchSuggestFull(movie.title).second }.getOrDefault(emptyList())
+
+    val best =
+      candidates.firstOrNull { normalizeTitleKey(it.title) == targetNorm && it.subjectId.isNotBlank() }
+        ?: candidates.firstOrNull {
+          normalizeTitleKey(it.title).contains(targetNorm) && it.subjectId.isNotBlank()
+        }
+        ?: candidates.firstOrNull { it.subjectId.isNotBlank() }
+        ?: return null
+
+    val updated =
+      movie.copy(
+        subjectId = best.subjectId,
+        detailPath = best.detailPath ?: movie.detailPath,
+      )
+    cache[movie.id] = updated
+    cache[best.id] = best
+    return updated
   }
 
   suspend fun getRecommendations(subjectId: String, genreHint: String? = null): List<Movie> {
@@ -320,7 +408,7 @@ class MovieCatalogRepository(
         } else null
 
       val mboxDeferred = async {
-        runCatching { movieBox.search(cleanQuery, page = 1, perPage = 24) }
+        runCatching { movieBox.search(cleanQuery, page = 1, perPage = 28) }
           .getOrDefault(emptyList())
       }
       val suggestDeferred = async {
@@ -329,36 +417,55 @@ class MovieCatalogRepository(
       }
       val itunesDeferred = async {
         runCatching {
-            api.searchMovies(term = cleanQuery, limit = 25).results.mapNotNull { it.toDomain() }
+            api.searchMovies(term = cleanQuery, limit = 20).results.mapNotNull { it.toDomain() }
           }
           .getOrDefault(emptyList())
+      }
+      val tvMazeDeferred = async {
+        runCatching { jikanTvMaze.searchTvShows(cleanQuery, limit = 15) }.getOrDefault(emptyList())
+      }
+      val jikanDeferred = async {
+        runCatching { jikanTvMaze.searchAnime(cleanQuery, limit = 15) }.getOrDefault(emptyList())
       }
 
       val directMovie = directIdDeferred?.await()
       val mboxHits = mboxDeferred.await()
       val (suggestions, suggestMovies) = suggestDeferred.await()
       val itunesHits = itunesDeferred.await()
+      val tvHits = tvMazeDeferred.await()
+      val animeHits = jikanDeferred.await()
 
-      val liveCombined =
-        (listOfNotNull(directMovie) + mboxHits + suggestMovies + itunesHits).distinctBy { it.id }
-      liveCombined.forEach { cache[it.id] = it }
-
-      if (liveCombined.isNotEmpty()) {
-        val cacheExtras =
-          cache.values.filter { cached ->
-            liveCombined.none { it.id == cached.id } && matchesQueryTokens(cleanQuery, cached)
+      val rawCombined =
+        listOfNotNull(directMovie) + mboxHits + suggestMovies + tvHits + animeHits + itunesHits
+      // Prefer entries that already have stream subjectId or better metadata, keep distinct by normalized title+type
+      val deduped =
+        rawCombined
+          .distinctBy { it.id }
+          .groupBy { normalizeTitleKey(it.title) }
+          .values
+          .mapNotNull { group ->
+            group.firstOrNull { it.subjectId.isNotBlank() && it.posterUrl.isNotBlank() }
+              ?: group.firstOrNull { it.subjectId.isNotBlank() }
+              ?: group.firstOrNull { it.posterUrl.isNotBlank() }
+              ?: group.firstOrNull()
           }
-        val ranked = rankSearchResults(cleanQuery, (liveCombined + cacheExtras).distinctBy { it.id })
-        Triple(ranked, suggestions, false)
-      } else {
-        val localMatches = rankSearchResults(cleanQuery, searchLocalCache(cleanQuery))
-        Triple(localMatches, suggestions, false)
-      }
+
+      deduped.forEach { cache[it.id] = it }
+
+      val cacheExtras =
+        cache.values.filter { cached ->
+          deduped.none { normalizeTitleKey(it.title) == normalizeTitleKey(cached.title) } &&
+            matchesQueryTokens(cleanQuery, cached)
+        }
+      val combinedAll = (deduped + cacheExtras).distinctBy { it.id }
+      val ranked = rankSearchResults(cleanQuery, combinedAll)
+
+      Triple(ranked, suggestions, deduped.isEmpty() && ranked.isEmpty())
     } catch (e: CancellationException) {
       throw e
     } catch (_: Exception) {
       val localMatches = rankSearchResults(cleanQuery, searchLocalCache(cleanQuery))
-      Triple(localMatches, emptyList(), true)
+      Triple(localMatches, emptyList(), localMatches.isEmpty())
     }
   }
 
@@ -490,6 +597,9 @@ class MovieCatalogRepository(
     val haystack = "${movie.title} ${movie.director} ${movie.genre} ${movie.mediaType}"
     return tokens.all { haystack.contains(it, ignoreCase = true) }
   }
+
+  private fun normalizeTitleKey(raw: String): String =
+    raw.lowercase().replace(Regex("[^a-z0-9]"), "")
 
   internal fun rankSearchResults(query: String, movies: List<Movie>): List<Movie> {
     val q = query.trim().lowercase()

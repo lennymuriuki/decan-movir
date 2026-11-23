@@ -53,6 +53,7 @@ class SearchViewModel(
   }
 
   fun onQueryChange(newQuery: String) {
+    val prevQuery = _uiState.value.query
     _uiState.update {
       it.copy(
         query = newQuery,
@@ -60,17 +61,18 @@ class SearchViewModel(
         suggestions = if (newQuery.trim().length < 2) emptyList() else it.suggestions,
       )
     }
+    if (newQuery == prevQuery && _uiState.value.results.isNotEmpty()) return
     searchJob?.cancel()
     searchJob =
       viewModelScope.launch {
-        delay(280L)
+        delay(320L)
         executeSearch(newQuery)
       }
   }
 
   fun submitSearch() {
-    searchJob?.cancel()
     val currentQuery = _uiState.value.query
+    searchJob?.cancel()
     _uiState.update { it.copy(selectedGenre = "All") }
     searchJob = viewModelScope.launch { executeSearch(currentQuery) }
   }
@@ -97,10 +99,14 @@ class SearchViewModel(
   private suspend fun executeSearch(query: String) {
     _uiState.update { it.copy(isLoading = true) }
     val (movies, suggestions, offline) = catalogRepository.searchCatalogWithSuggestions(query)
-    _uiState.update {
-      it.copy(
+    _uiState.update { state ->
+      val finalMovies =
+        if (movies.isNotEmpty()) movies
+        else if (query.trim().isBlank()) state.results
+        else emptyList()
+      state.copy(
         isLoading = false,
-        results = movies,
+        results = finalMovies,
         suggestions = if (query.trim().length >= 2) suggestions else emptyList(),
         isOfflineFallback = offline,
       )

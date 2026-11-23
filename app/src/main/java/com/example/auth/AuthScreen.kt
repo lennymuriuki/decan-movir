@@ -242,6 +242,52 @@ fun AuthScreen(
         }
 
         Spacer(modifier = Modifier.height(4.dp))
+
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          OutlinedButton(
+            onClick = {
+              runCatching {
+                context.startActivity(
+                  android.content.Intent(
+                    android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse("https://www.decankonnect.co.ke/"),
+                  )
+                )
+              }
+            },
+            shape = MaterialTheme.shapes.medium,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier.weight(1f).testTag("auth_link_website"),
+          ) {
+            Text(
+              text = "Decan Konnect",
+              style = MaterialTheme.typography.labelMedium,
+            )
+          }
+          OutlinedButton(
+            onClick = {
+              runCatching {
+                context.startActivity(
+                  android.content.Intent(
+                    android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse("https://chat.whatsapp.com/GEIVBf7Mx21EBqZn2FOaHF"),
+                  )
+                )
+              }
+            },
+            shape = MaterialTheme.shapes.medium,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier.weight(1f).testTag("auth_link_whatsapp"),
+          ) {
+            Text(
+              text = "WhatsApp Group",
+              style = MaterialTheme.typography.labelMedium,
+            )
+          }
+        }
       }
     }
   }

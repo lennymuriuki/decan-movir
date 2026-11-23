@@ -66,6 +66,7 @@ import com.example.data.remote.moviebox.MovieBoxSeason
 import com.example.data.remote.moviebox.MovieBoxStream
 import com.example.data.remote.moviebox.MovieBoxSubtitle
 import com.example.notifications.DecanNotificationManager
+import com.example.data.settings.DownloadStorageLocation
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 
@@ -80,6 +81,8 @@ fun BatchDownloadSheet(
   catalogRepository: MovieCatalogRepository,
   allowMetered: Boolean,
   defaultIncludeSubs: Boolean,
+  storageLocation: DownloadStorageLocation = DownloadStorageLocation.PUBLIC_DOWNLOADS,
+  onChangeStorageLocation: (DownloadStorageLocation) -> Unit = {},
   notifyDownloads: Boolean = true,
   onDismiss: () -> Unit,
   onNotify: (String) -> Unit,
@@ -87,8 +90,13 @@ fun BatchDownloadSheet(
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+  var chosenStorage by remember(storageLocation) { mutableStateOf(storageLocation) }
 
   val isSeriesMode = seasons.isNotEmpty()
+  val isSeriesFolder =
+    isSeriesMode ||
+      movie.mediaType.equals("Series", ignoreCase = true) ||
+      movie.mediaType.equals("Anime", ignoreCase = true)
   var selectedSeason by remember {
     mutableIntStateOf(if (initialSeason > 0) initialSeason else (seasons.firstOrNull()?.season ?: 1))
   }
@@ -141,6 +149,33 @@ fun BatchDownloadSheet(
         }
         IconButton(onClick = { if (!isQueueing) onDismiss() }) {
           Icon(imageVector = Icons.Filled.Close, contentDescription = "Close")
+        }
+      }
+
+      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+          text = "Save To Folder (${if (isSeriesFolder) "Series/${movie.title}" else "Movies/${movie.title}"})",
+          style = MaterialTheme.typography.labelLarge,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          DownloadStorageLocation.entries.forEach { loc ->
+            FilterChip(
+              selected = chosenStorage == loc,
+              onClick = {
+                if (!isQueueing) {
+                  chosenStorage = loc
+                  onChangeStorageLocation(loc)
+                }
+              },
+              label = { Text(loc.label) },
+              colors =
+                FilterChipDefaults.filterChipColors(
+                  selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                  selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                ),
+            )
+          }
         }
       }
 
@@ -461,7 +496,9 @@ fun BatchDownloadSheet(
                     stream = chosenStream,
                     season = selectedSeason,
                     episode = ep,
+                    isSeries = true,
                     allowMetered = allowMetered,
+                    storageLocation = chosenStorage,
                   ).onSuccess { queuedCount++ }.onFailure { failedCount++ }
                 } else {
                   failedCount++
@@ -476,7 +513,9 @@ fun BatchDownloadSheet(
                     subtitle = sub,
                     season = selectedSeason,
                     episode = ep,
+                    isSeries = true,
                     allowMetered = allowMetered,
+                    storageLocation = chosenStorage,
                   ).onSuccess { queuedCount++ }
                 }
                 progressDone++
@@ -488,9 +527,11 @@ fun BatchDownloadSheet(
                   movieTitle = movie.title,
                   fileCount = queuedCount,
                   systemEnabled = notifyDownloads,
+                  imageUrl = movie.posterUrl,
+                  targetMovieId = movie.id,
                 )
               }
-              onNotify("Queued $queuedCount files to Downloads/DecanMovie (${if (failedCount > 0) "$failedCount unavailable" else "ready"})")
+              onNotify("Queued $queuedCount files to ${chosenStorage.pathHint} (${if (failedCount > 0) "$failedCount unavailable" else "ready"})")
               onDismiss()
             }
           } else {
@@ -504,7 +545,9 @@ fun BatchDownloadSheet(
                 subtitles = subs,
                 season = 0,
                 episode = 0,
+                isSeries = isSeriesFolder,
                 allowMetered = allowMetered,
+                storageLocation = chosenStorage,
               )
             if (result.queuedFiles > 0) {
               DecanNotificationManager.notifyBatchQueued(
@@ -512,9 +555,11 @@ fun BatchDownloadSheet(
                 movieTitle = movie.title,
                 fileCount = result.queuedFiles,
                 systemEnabled = notifyDownloads,
+                imageUrl = movie.posterUrl,
+                targetMovieId = movie.id,
               )
             }
-            onNotify("Queued ${result.queuedFiles} file(s) to Downloads/DecanMovie")
+            onNotify("Queued ${result.queuedFiles} file(s) to ${chosenStorage.pathHint}")
             onDismiss()
           }
         },

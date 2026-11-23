@@ -27,6 +27,9 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.NewReleases
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Palette
@@ -42,6 +45,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -66,6 +70,7 @@ import com.example.BuildConfig
 import com.example.auth.GoogleSignInButton
 import com.example.data.settings.AppSettings
 import com.example.data.settings.AppThemeMode
+import com.example.data.settings.DownloadStorageLocation
 import com.example.notifications.DecanNotificationManager
 import com.example.ui.viewmodel.UpdateUiState
 
@@ -88,11 +93,14 @@ fun SettingsScreen(
   onSetDefaultPlaybackSpeed: (Float) -> Unit,
   onSetAllowMeteredDownloads: (Boolean) -> Unit,
   onSetIncludeSubtitlesInBatch: (Boolean) -> Unit,
+  onSetStorageLocation: (DownloadStorageLocation) -> Unit = {},
   onSetEnableDownloadNotifications: (Boolean) -> Unit,
   onSetEnableReleaseNotifications: (Boolean) -> Unit,
   onSetEnableTrendingNotifications: (Boolean) -> Unit,
   onSendTestNotification: () -> Unit,
   onCheckUpdates: () -> Unit,
+  onDownloadInstallUpdate: (apkUrl: String, fallbackUrl: String, tag: String) -> Unit = { apkUrl, _, _ -> },
+  onInstallDownloadedApk: (String) -> Unit = {},
   onNotify: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -404,26 +412,61 @@ fun SettingsScreen(
                   )
                 }
 
-                FilledTonalButton(
-                  onClick = {
-                    val targetUrl = preferredApkUrl ?: latest.htmlUrl
-                    runCatching {
-                      context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)))
-                    }
-                  },
-                  shape = MaterialTheme.shapes.medium,
-                  modifier = Modifier.fillMaxWidth().testTag("download_latest_update_button"),
-                ) {
-                  Icon(
-                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
+                if (updateState.isDownloadingApk) {
+                  LinearProgressIndicator(
+                    progress = { updateState.downloadProgress },
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                   )
-                  Spacer(modifier = Modifier.width(6.dp))
                   Text(
-                    if (preferredApkUrl != null) "Download Latest Update"
-                    else "View Update Details"
+                    text =
+                      updateState.installStatusMessage
+                        ?: "Downloading update (${(updateState.downloadProgress * 100).toInt()}%)…",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
                   )
+                } else if (!updateState.downloadedApkPath.isNullOrBlank()) {
+                  Button(
+                    onClick = { onInstallDownloadedApk(updateState.downloadedApkPath) },
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier.fillMaxWidth().testTag("install_downloaded_apk_button"),
+                  ) {
+                    Icon(
+                      imageVector = Icons.Filled.SystemUpdate,
+                      contentDescription = null,
+                      modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Tap to Install APK (${latest.tagName})")
+                  }
+                } else {
+                  FilledTonalButton(
+                    onClick = {
+                      if (preferredApkUrl != null) {
+                        onDownloadInstallUpdate(preferredApkUrl, latest.htmlUrl, latest.tagName)
+                      } else {
+                        runCatching {
+                          context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(latest.htmlUrl))
+                          )
+                        }.onFailure { onNotify("Could not open update page") }
+                      }
+                    },
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier.fillMaxWidth().testTag("download_latest_update_button"),
+                  ) {
+                    Icon(
+                      imageVector =
+                        if (preferredApkUrl != null) Icons.Filled.SystemUpdate
+                        else Icons.AutoMirrored.Filled.OpenInNew,
+                      contentDescription = null,
+                      modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                      if (preferredApkUrl != null) "Download & Install Update"
+                      else "View Update Details"
+                    )
+                  }
                 }
               }
             }
@@ -577,6 +620,125 @@ fun SettingsScreen(
             checked = appSettings.includeSubtitlesInBatch,
             onCheckedChange = onSetIncludeSubtitlesInBatch,
           )
+
+          HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            Icon(
+              imageVector = Icons.Filled.FolderOpen,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(16.dp),
+            )
+            Text(
+              text = "Default Download Folder",
+              style = MaterialTheme.typography.labelLarge,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+          FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            DownloadStorageLocation.entries.forEach { loc ->
+              FilterChip(
+                selected = appSettings.storageLocation == loc,
+                onClick = { onSetStorageLocation(loc) },
+                label = { Text(loc.label) },
+                modifier = Modifier.testTag("settings_storage_${loc.name}"),
+              )
+            }
+          }
+          Text(
+            text =
+              "Series go into ${appSettings.storageLocation.pathHint}/Series/<Title>/ and movies into ${appSettings.storageLocation.pathHint}/Movies/<Title>/.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
+    }
+
+    // Community & Official Links Card
+    item {
+      Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth().testTag("community_links_card"),
+      ) {
+        Column(
+          modifier = Modifier.padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            Icon(
+              imageVector = Icons.Filled.Language,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+              text = "Community & Official Links",
+              style = MaterialTheme.typography.titleMedium,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+          }
+
+          FilledTonalButton(
+            onClick = {
+              runCatching {
+                context.startActivity(
+                  Intent(Intent.ACTION_VIEW, Uri.parse("https://www.decankonnect.co.ke/"))
+                )
+              }.onFailure { onNotify("Could not open website") }
+            },
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth().testTag("link_decankonnect_website"),
+          ) {
+            Icon(
+              imageVector = Icons.Filled.Language,
+              contentDescription = null,
+              modifier = Modifier.size(18.dp),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Main Website — decankonnect.co.ke")
+            Spacer(modifier = Modifier.weight(1f))
+            Icon(
+              imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+              contentDescription = null,
+              modifier = Modifier.size(16.dp),
+            )
+          }
+
+          OutlinedButton(
+            onClick = {
+              runCatching {
+                context.startActivity(
+                  Intent(
+                    Intent.ACTION_VIEW,
+                    Uri.parse("https://chat.whatsapp.com/GEIVBf7Mx21EBqZn2FOaHF"),
+                  )
+                )
+              }.onFailure { onNotify("Could not open WhatsApp group") }
+            },
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth().testTag("link_whatsapp_group"),
+          ) {
+            Icon(
+              imageVector = Icons.Filled.Forum,
+              contentDescription = null,
+              modifier = Modifier.size(18.dp),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Main WhatsApp Group")
+            Spacer(modifier = Modifier.weight(1f))
+            Icon(
+              imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+              contentDescription = null,
+              modifier = Modifier.size(16.dp),
+            )
+          }
         }
       }
     }

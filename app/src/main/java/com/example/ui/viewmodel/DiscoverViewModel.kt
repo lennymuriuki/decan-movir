@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.Movie
 import com.example.data.model.MovieRail
+import com.example.data.remote.AnimeSortMode
+import com.example.data.remote.JikanTvMazeService
 import com.example.data.remote.MovieCatalogRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,9 +24,14 @@ enum class MediaFilter(val label: String) {
 data class DiscoverUiState(
   val isLoading: Boolean = true,
   val isLoadingMore: Boolean = false,
+  val isLoadingAnime: Boolean = false,
   val spotlight: List<Movie> = emptyList(),
   val rankings: List<Movie> = emptyList(),
   val anime: List<Movie> = emptyList(),
+  val animeFeed: List<Movie> = emptyList(),
+  val selectedAnimeGenre: String = "All",
+  val selectedAnimeSort: AnimeSortMode = AnimeSortMode.TOP_RANKED,
+  val availableAnimeGenres: List<String> = JikanTvMazeService.ANIME_GENRES.map { it.label },
   val recommendations: List<Movie> = emptyList(),
   val rails: List<MovieRail> = emptyList(),
   val allMovies: List<Movie> = emptyList(),
@@ -46,6 +53,7 @@ class DiscoverViewModel(
   val uiState: StateFlow<DiscoverUiState> = _uiState.asStateFlow()
 
   private var currentPage = 1
+  private var animePage = 1
 
   init {
     loadCatalog(forceRefresh = false)
@@ -53,6 +61,14 @@ class DiscoverViewModel(
 
   fun refreshCatalog() {
     loadCatalog(forceRefresh = true)
+    if (_uiState.value.selectedMediaFilter == MediaFilter.ANIME) {
+      fetchAnimeFiltered(
+        genre = _uiState.value.selectedAnimeGenre,
+        sortMode = _uiState.value.selectedAnimeSort,
+        page = 1,
+        append = false,
+      )
+    }
   }
 
   private fun loadCatalog(forceRefresh: Boolean) {
@@ -68,10 +84,10 @@ class DiscoverViewModel(
             .distinct()
             .sorted()
         val mergedGenres =
-          (listOf("All", "Action", "Sci-Fi", "Animation", "Drama", "Thriller", "Comedy", "Horror", "Romance") +
+          (listOf("All", "Action", "Sci-Fi", "Animation", "Drama", "Thriller", "Comedy", "Horror", "Romance", "Supernatural", "Adventure") +
               dynamicGenres)
             .distinct()
-            .take(14)
+            .take(16)
 
         _uiState.update {
           it.copy(
@@ -118,11 +134,81 @@ class DiscoverViewModel(
 
   fun selectMediaFilter(filter: MediaFilter) {
     _uiState.update { it.copy(selectedMediaFilter = filter) }
+    if (filter == MediaFilter.ANIME && _uiState.value.animeFeed.isEmpty()) {
+      fetchAnimeFiltered(
+        genre = _uiState.value.selectedAnimeGenre,
+        sortMode = _uiState.value.selectedAnimeSort,
+        page = 1,
+        append = false,
+      )
+    }
+  }
+
+  fun selectAnimeGenre(genre: String) {
+    _uiState.update { it.copy(selectedAnimeGenre = genre) }
+    animePage = 1
+    fetchAnimeFiltered(
+      genre = genre,
+      sortMode = _uiState.value.selectedAnimeSort,
+      page = 1,
+      append = false,
+    )
+  }
+
+  fun selectAnimeSort(sortMode: AnimeSortMode) {
+    _uiState.update { it.copy(selectedAnimeSort = sortMode) }
+    animePage = 1
+    fetchAnimeFiltered(
+      genre = _uiState.value.selectedAnimeGenre,
+      sortMode = sortMode,
+      page = 1,
+      append = false,
+    )
+  }
+
+  private fun fetchAnimeFiltered(
+    genre: String,
+    sortMode: AnimeSortMode,
+    page: Int,
+    append: Boolean,
+  ) {
+    viewModelScope.launch {
+      _uiState.update {
+        it.copy(isLoadingAnime = !append, isLoadingMore = append)
+      }
+      val fetched =
+        catalogRepository.loadAnimeCatalog(
+          genreLabel = genre,
+          sortMode = sortMode,
+          page = page,
+        )
+      _uiState.update { s ->
+        val updatedAnime =
+          if (append) (s.animeFeed + fetched).distinctBy { it.id }
+          else fetched
+        s.copy(
+          isLoadingAnime = false,
+          isLoadingMore = false,
+          animeFeed = updatedAnime,
+          allMovies = (s.allMovies + fetched).distinctBy { it.id },
+        )
+      }
+    }
   }
 
   fun loadMoreForActiveFilter() {
     val state = _uiState.value
     if (state.isLoadingMore || state.selectedMediaFilter == MediaFilter.ALL || state.selectedMediaFilter == MediaFilter.RANKINGS) {
+      return
+    }
+    if (state.selectedMediaFilter == MediaFilter.ANIME) {
+      animePage += 1
+      fetchAnimeFiltered(
+        genre = state.selectedAnimeGenre,
+        sortMode = state.selectedAnimeSort,
+        page = animePage,
+        append = true,
+      )
       return
     }
     viewModelScope.launch {
@@ -131,13 +217,12 @@ class DiscoverViewModel(
       val extra =
         catalogRepository.loadMorePage(
           isSeries = state.selectedMediaFilter == MediaFilter.SERIES,
-          isAnime = state.selectedMediaFilter == MediaFilter.ANIME,
+          isAnime = false,
           page = currentPage,
         )
       _uiState.update { s ->
         s.copy(
           isLoadingMore = false,
-          anime = if (s.selectedMediaFilter == MediaFilter.ANIME) (s.anime + extra).distinctBy { it.id } else s.anime,
           allMovies = (s.allMovies + extra).distinctBy { it.id },
         )
       }

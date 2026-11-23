@@ -1,10 +1,6 @@
 package com.example.ui.screens
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,30 +30,21 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkAdd
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadForOffline
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.Hd
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.Subtitles
+import com.example.data.settings.DownloadStorageLocation
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -76,10 +63,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.example.data.download.StreamDownloadManager
 import com.example.data.model.Movie
 import com.example.data.model.SavedMovieEntry
 import com.example.data.model.WatchStatus
@@ -105,6 +90,8 @@ fun MovieDetailScreen(
   catalogRepository: MovieCatalogRepository,
   allowMeteredDownloads: Boolean,
   includeSubtitlesInBatch: Boolean,
+  storageLocation: DownloadStorageLocation = DownloadStorageLocation.PUBLIC_DOWNLOADS,
+  onChangeStorageLocation: (DownloadStorageLocation) -> Unit = {},
   notifyDownloads: Boolean = true,
   isSaving: Boolean,
   onBack: () -> Unit,
@@ -131,17 +118,14 @@ fun MovieDetailScreen(
   var streams by remember(movieId) { mutableStateOf<List<MovieBoxStream>>(emptyList()) }
   var subtitles by remember(movieId) { mutableStateOf<List<MovieBoxSubtitle>>(emptyList()) }
   var recommendations by remember(movieId) { mutableStateOf<List<Movie>>(emptyList()) }
-  var isResolvingStreams by remember(movieId) { mutableStateOf(false) }
   var showBatchSheet by remember(movieId) { mutableStateOf(false) }
 
   suspend fun loadStreamsAndSubs(subjectId: String, se: Int, ep: Int, detailPath: String?) {
     if (subjectId.isBlank()) return
-    isResolvingStreams = true
     val streamsDeferred = scope.async { catalogRepository.getStreams(subjectId, se, ep, detailPath) }
     val subsDeferred = scope.async { catalogRepository.getSubtitles(subjectId, se, ep) }
     streams = streamsDeferred.await()
     subtitles = subsDeferred.await()
-    isResolvingStreams = false
   }
 
   LaunchedEffect(movieId) {
@@ -167,15 +151,39 @@ fun MovieDetailScreen(
       }
       recommendations = recDeferred.await().filter { it.id != movieId }
     } else {
-      val enriched = catalogRepository.getMovieDetail(movieId)
-      if (enriched != null) {
-        movie = enriched
-      }
-      val sid = enriched?.subjectId.orEmpty()
+      val base = catalogRepository.getMovieDetail(movieId) ?: movie
+      if (base != null) movie = base
+      val bridged =
+        if (base != null && base.subjectId.isBlank()) {
+          catalogRepository.resolvePlayableSubject(base) ?: base
+        } else base
+      if (bridged != null) movie = bridged
+      val sid = bridged?.subjectId.orEmpty()
       val recDeferred =
-        scope.async { catalogRepository.getRecommendations(sid, enriched?.genre ?: movie?.genre) }
+        scope.async { catalogRepository.getRecommendations(sid, bridged?.genre ?: movie?.genre) }
       if (sid.isNotBlank()) {
-        loadStreamsAndSubs(sid, 0, 0, enriched?.detailPath)
+        val rich = catalogRepository.getMovieBoxRichDetail(sid)
+        if (rich != null) {
+          dubs = rich.dubs
+          seasons = rich.seasons
+          val mergedMovie =
+            bridged!!.copy(
+              detailPath = rich.detailPath.ifBlank { bridged.detailPath },
+              posterUrl = bridged.posterUrl.ifBlank { rich.movie.posterUrl },
+              backdropUrl = bridged.backdropUrl.ifBlank { rich.movie.backdropUrl },
+            )
+          movie = mergedMovie
+          if (rich.seasons.isNotEmpty()) {
+            val firstSeason = rich.seasons.first()
+            selectedSeason = firstSeason.season
+            selectedEpisode = 1
+            loadStreamsAndSubs(sid, firstSeason.season, 1, rich.detailPath)
+          } else {
+            loadStreamsAndSubs(sid, 0, 0, rich.detailPath)
+          }
+        } else {
+          loadStreamsAndSubs(sid, 0, 0, bridged?.detailPath)
+        }
       }
       recommendations = recDeferred.await().filter { it.id != movieId }
     }
@@ -490,183 +498,6 @@ fun MovieDetailScreen(
         )
       }
 
-      if (activeMovie.subjectId.isNotBlank()) {
-        Card(
-          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-          shape = MaterialTheme.shapes.large,
-          modifier = Modifier.fillMaxWidth(),
-        ) {
-          Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-          ) {
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween,
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-              ) {
-                Icon(
-                  imageVector = Icons.Filled.Hd,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.primary,
-                )
-                Column {
-                  Text(
-                    text = "Streams & Downloads",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                  )
-                  if (selectedSeason > 0 && selectedEpisode > 0) {
-                    Text(
-                      text = "Season $selectedSeason • Episode $selectedEpisode",
-                      style = MaterialTheme.typography.bodySmall,
-                      color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                  }
-                }
-              }
-
-              IconButton(
-                onClick = {
-                  scope.launch {
-                    loadStreamsAndSubs(
-                      activeMovie.subjectId,
-                      selectedSeason,
-                      selectedEpisode,
-                      activeMovie.detailPath,
-                    )
-                  }
-                },
-                modifier = Modifier.testTag("refresh_streams_button"),
-              ) {
-                Icon(
-                  imageVector = Icons.Filled.Refresh,
-                  contentDescription = "Resolve streams",
-                  tint = MaterialTheme.colorScheme.primary,
-                )
-              }
-            }
-
-            if (isResolvingStreams) {
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-              ) {
-                CircularProgressIndicator(
-                  modifier = Modifier.size(20.dp),
-                  strokeWidth = 2.dp,
-                  color = MaterialTheme.colorScheme.primary,
-                )
-                Text(
-                  text = "Resolving 1080p streams & subtitle tracks…",
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-              }
-            } else if (streams.isEmpty()) {
-              Text(
-                text = "Streams unavailable right now. Tap refresh to try again.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            } else {
-              streams.forEachIndexed { idx, stream ->
-                if (idx > 0) {
-                  HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                }
-                StreamOptionRow(
-                  stream = stream,
-                  onPlay = {
-                    if (stream.isPlayableDirect) {
-                      onOpenPlayer(activeMovie, selectedSeason, selectedEpisode)
-                    } else {
-                      runCatching {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(stream.url)))
-                      }
-                    }
-                  },
-                  onDownload = {
-                    StreamDownloadManager.enqueueStreamDownload(
-                      context = context,
-                      movieTitle = activeMovie.title,
-                      stream = stream,
-                      season = selectedSeason,
-                      episode = selectedEpisode,
-                      allowMetered = allowMeteredDownloads,
-                    ).onSuccess {
-                      onNotify("Downloading ${activeMovie.title} (${stream.quality}) to Downloads/DecanMovie")
-                    }.onFailure { err ->
-                      onNotify(err.localizedMessage ?: "Download failed to start")
-                    }
-                  },
-                  onCopy = {
-                    copyToClipboard(context, stream.url)
-                    onNotify("Stream URL copied")
-                  },
-                )
-              }
-            }
-
-            if (subtitles.isNotEmpty()) {
-              HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-              ) {
-                Icon(
-                  imageVector = Icons.Filled.Subtitles,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.primary,
-                  modifier = Modifier.size(18.dp),
-                )
-                Text(
-                  text = "Subtitles (.srt) • ${subtitles.size} tracks",
-                  style = MaterialTheme.typography.titleSmall,
-                  color = MaterialTheme.colorScheme.onSurface,
-                )
-              }
-
-              LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(vertical = 2.dp),
-              ) {
-                items(subtitles, key = { "${it.code}_${it.url}" }) { sub ->
-                  FilledTonalButton(
-                    onClick = {
-                      StreamDownloadManager.enqueueSubtitleDownload(
-                        context = context,
-                        movieTitle = activeMovie.title,
-                        subtitle = sub,
-                        season = selectedSeason,
-                        episode = selectedEpisode,
-                        allowMetered = allowMeteredDownloads,
-                      ).onSuccess {
-                        onNotify("Downloading ${sub.language} (.srt) subtitles")
-                      }.onFailure { err ->
-                        onNotify(err.localizedMessage ?: "Subtitle download failed")
-                      }
-                    },
-                    shape = MaterialTheme.shapes.medium,
-                  ) {
-                    Icon(
-                      imageVector = Icons.Filled.Download,
-                      contentDescription = null,
-                      modifier = Modifier.size(16.dp),
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(sub.language, style = MaterialTheme.typography.labelLarge)
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-
       if (activeMovie.synopsis.isNotBlank()) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
           Text(
@@ -725,100 +556,11 @@ fun MovieDetailScreen(
       catalogRepository = catalogRepository,
       allowMetered = allowMeteredDownloads,
       defaultIncludeSubs = includeSubtitlesInBatch,
+      storageLocation = storageLocation,
+      onChangeStorageLocation = onChangeStorageLocation,
       notifyDownloads = notifyDownloads,
       onDismiss = { showBatchSheet = false },
       onNotify = onNotify,
     )
   }
-}
-
-@Composable
-private fun StreamOptionRow(
-  stream: MovieBoxStream,
-  onPlay: () -> Unit,
-  onDownload: () -> Unit,
-  onCopy: () -> Unit,
-) {
-  Row(
-    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-    horizontalArrangement = Arrangement.SpaceBetween,
-    verticalAlignment = Alignment.CenterVertically,
-  ) {
-    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-      ) {
-        Surface(
-          color =
-            if (stream.quality.contains("1080") || stream.quality.contains("2160"))
-              MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.surfaceContainerHigh,
-          shape = MaterialTheme.shapes.extraSmall,
-        ) {
-          Text(
-            text = stream.quality,
-            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-            color =
-              if (stream.quality.contains("1080") || stream.quality.contains("2160"))
-                MaterialTheme.colorScheme.onPrimary
-              else MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-          )
-        }
-        Text(
-          text = stream.format,
-          style = MaterialTheme.typography.labelLarge,
-          color = MaterialTheme.colorScheme.onSurface,
-        )
-        if (stream.sizeMb > 0.0) {
-          Text(
-            text = "${stream.sizeMb} MB",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-      }
-      Text(
-        text = buildString {
-          append(stream.source)
-          if (!stream.codec.isNullOrBlank()) append(" • ${stream.codec}")
-        },
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-    }
-
-    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-      FilledTonalIconButton(
-        onClick = onPlay,
-        colors =
-          IconButtonDefaults.filledTonalIconButtonColors(
-            containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary,
-          ),
-      ) {
-        Icon(imageVector = Icons.Filled.PlayArrow, contentDescription = "Watch stream in player")
-      }
-
-      if (stream.isPlayableDirect) {
-        FilledTonalIconButton(onClick = onDownload) {
-          Icon(imageVector = Icons.Filled.Download, contentDescription = "Download MP4")
-        }
-      }
-
-      IconButton(onClick = onCopy) {
-        Icon(
-          imageVector = Icons.Filled.ContentCopy,
-          contentDescription = "Copy stream URL",
-          tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-      }
-    }
-  }
-}
-
-private fun copyToClipboard(context: Context, value: String) {
-  val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-  clipboard.setPrimaryClip(ClipData.newPlainText("Stream URL", value))
 }

@@ -13,6 +13,12 @@ enum class AppThemeMode(val label: String) {
   LIGHT("Editorial Light"),
 }
 
+enum class DownloadStorageLocation(val label: String, val pathHint: String) {
+  PUBLIC_DOWNLOADS("Device Downloads", "Downloads/DecanMovie"),
+  GALLERY_MOVIES("Gallery (Movies)", "Movies/DecanMovie"),
+  APP_PRIVATE("App Folder", "Decan App Library"),
+}
+
 @Immutable
 data class AppSettings(
   val themeMode: AppThemeMode = AppThemeMode.DARK,
@@ -22,6 +28,7 @@ data class AppSettings(
   val defaultPlaybackSpeed: Float = 1.0f,
   val allowMeteredDownloads: Boolean = true,
   val includeSubtitlesInBatch: Boolean = true,
+  val storageLocation: DownloadStorageLocation = DownloadStorageLocation.PUBLIC_DOWNLOADS,
   val enableDownloadNotifications: Boolean = true,
   val enableReleaseNotifications: Boolean = true,
   val enableTrendingNotifications: Boolean = true,
@@ -44,6 +51,10 @@ class AppSettingsRepository(context: Context) {
   private fun readSettings(): AppSettings {
     val themeName = prefs.getString(KEY_THEME, AppThemeMode.DARK.name)
     val theme = AppThemeMode.entries.firstOrNull { it.name == themeName } ?: AppThemeMode.DARK
+    val storageName = prefs.getString(KEY_STORAGE_LOCATION, DownloadStorageLocation.PUBLIC_DOWNLOADS.name)
+    val storage =
+      DownloadStorageLocation.entries.firstOrNull { it.name == storageName }
+        ?: DownloadStorageLocation.PUBLIC_DOWNLOADS
     return AppSettings(
       themeMode = theme,
       preferredQuality = prefs.getInt(KEY_QUALITY, 1080),
@@ -52,6 +63,7 @@ class AppSettingsRepository(context: Context) {
       defaultPlaybackSpeed = prefs.getFloat(KEY_SPEED, 1.0f),
       allowMeteredDownloads = prefs.getBoolean(KEY_METERED_DL, true),
       includeSubtitlesInBatch = prefs.getBoolean(KEY_BATCH_SUBS, true),
+      storageLocation = storage,
       enableDownloadNotifications = prefs.getBoolean(KEY_NOTIF_DOWNLOADS, true),
       enableReleaseNotifications = prefs.getBoolean(KEY_NOTIF_RELEASES, true),
       enableTrendingNotifications = prefs.getBoolean(KEY_NOTIF_TRENDING, true),
@@ -98,6 +110,11 @@ class AppSettingsRepository(context: Context) {
     _settings.update { it.copy(includeSubtitlesInBatch = include) }
   }
 
+  fun setStorageLocation(location: DownloadStorageLocation) {
+    prefs.edit().putString(KEY_STORAGE_LOCATION, location.name).apply()
+    _settings.update { it.copy(storageLocation = location) }
+  }
+
   fun setEnableDownloadNotifications(enabled: Boolean) {
     prefs.edit().putBoolean(KEY_NOTIF_DOWNLOADS, enabled).apply()
     _settings.update { it.copy(enableDownloadNotifications = enabled) }
@@ -138,6 +155,7 @@ class AppSettingsRepository(context: Context) {
     const val KEY_SPEED = "default_speed"
     const val KEY_METERED_DL = "allow_metered_dl"
     const val KEY_BATCH_SUBS = "include_batch_subs"
+    const val KEY_STORAGE_LOCATION = "download_storage_location"
     const val KEY_NOTIF_DOWNLOADS = "notif_downloads"
     const val KEY_NOTIF_RELEASES = "notif_releases"
     const val KEY_NOTIF_TRENDING = "notif_trending"

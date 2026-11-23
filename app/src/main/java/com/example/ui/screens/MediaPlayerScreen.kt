@@ -147,6 +147,9 @@ fun MediaPlayerScreen(
   var activeStream by remember { mutableStateOf<MovieBoxStream?>(null) }
   var activeSubtitle by remember { mutableStateOf<MovieBoxSubtitle?>(null) }
   var subtitleCues by remember { mutableStateOf<List<SubtitleCue>>(emptyList()) }
+  var offlineSubTracks by remember(localPlayUri) {
+    mutableStateOf<Map<String, List<SubtitleCue>>>(emptyMap())
+  }
   var isLoadingMedia by remember { mutableStateOf(localPlayUri.isNullOrBlank()) }
 
   var isFullscreen by remember { mutableStateOf(false) }
@@ -326,6 +329,25 @@ fun MediaPlayerScreen(
   // Initial load for movie detail, streams, subtitles & recommendations
   LaunchedEffect(activeMovieId, localPlayUri) {
     if (!localPlayUri.isNullOrBlank()) {
+      val targetTitle = localTitle?.takeIf { it.isNotBlank() } ?: movie?.title.orEmpty()
+      val discovered =
+        StreamDownloadManager.findOfflineSubtitlesForMedia(
+          context = context,
+          localUri = localPlayUri,
+          mediaTitle = targetTitle,
+        )
+      offlineSubTracks = discovered.associate { it.first.url to it.second }
+      subtitles = discovered.map { it.first }
+      if (discovered.isNotEmpty()) {
+        val preferredOffline =
+          discovered.firstOrNull { it.first.language.contains("English", ignoreCase = true) }
+            ?: discovered.first()
+        activeSubtitle = preferredOffline.first
+        subtitleCues = preferredOffline.second
+      } else {
+        activeSubtitle = null
+        subtitleCues = emptyList()
+      }
       isLoadingMedia = false
       return@LaunchedEffect
     }
@@ -354,14 +376,38 @@ fun MediaPlayerScreen(
       }
       recommendations = recDeferred.await().filter { it.id != activeMovieId }
     } else {
-      val enriched = catalogRepository.getMovieDetail(activeMovieId)
-      if (enriched != null) movie = enriched
-      val sid = enriched?.subjectId.orEmpty()
+      val fetchedDetail = catalogRepository.getMovieDetail(activeMovieId) ?: movie
+      val resolvedMovie =
+        if (fetchedDetail != null && fetchedDetail.subjectId.isBlank()) {
+          catalogRepository.resolvePlayableSubject(fetchedDetail) ?: fetchedDetail
+        } else {
+          fetchedDetail
+        }
+      if (resolvedMovie != null) movie = resolvedMovie
+      val sid = resolvedMovie?.subjectId.orEmpty()
       val recDeferred = scope.async {
-        catalogRepository.getRecommendations(sid, enriched?.genre ?: movie?.genre)
+        catalogRepository.getRecommendations(sid, resolvedMovie?.genre ?: movie?.genre)
       }
       if (sid.isNotBlank()) {
-        resolveEpisodeOrMovieStreams(sid, selectedSeason, selectedEpisode, enriched?.detailPath)
+        val rich = catalogRepository.getMovieBoxRichDetail(sid)
+        if (rich != null) {
+          movie = rich.movie
+          dubs = rich.dubs
+          seasons = rich.seasons
+          val se =
+            if (rich.seasons.isNotEmpty()) {
+              if (selectedSeason > 0) selectedSeason else rich.seasons.first().season
+            } else 0
+          val ep =
+            if (rich.seasons.isNotEmpty()) {
+              if (selectedEpisode > 0) selectedEpisode else 1
+            } else 0
+          selectedSeason = se
+          selectedEpisode = ep
+          resolveEpisodeOrMovieStreams(sid, se, ep, rich.detailPath)
+        } else {
+          resolveEpisodeOrMovieStreams(sid, selectedSeason, selectedEpisode, resolvedMovie?.detailPath)
+        }
       } else {
         isLoadingMedia = false
       }
@@ -1066,9 +1112,15 @@ fun MediaPlayerScreen(
       onSelectSubtitle = { sub ->
         activeSubtitle = sub
         showSubtitleSheet = false
-        scope.launch {
-          subtitleCues = catalogRepository.fetchSubtitleCues(sub.url)
-          onNotify("Loaded ${sub.language} captions (${subtitleCues.size} lines)")
+        val localCues = offlineSubTracks[sub.url]
+        if (localCues != null) {
+          subtitleCues = localCues
+          onNotify("Loaded ${sub.language} captions (${localCues.size} lines)")
+        } else {
+          scope.launch {
+            subtitleCues = catalogRepository.fetchSubtitleCues(sub.url)
+            onNotify("Loaded ${sub.language} captions (${subtitleCues.size} lines)")
+          }
         }
       },
       onDownloadSubtitle = { sub ->
@@ -1078,7 +1130,9 @@ fun MediaPlayerScreen(
           subtitle = sub,
           season = selectedSeason,
           episode = selectedEpisode,
+          isSeries = seasons.isNotEmpty() || (selectedSeason > 0 && selectedEpisode > 0),
           allowMetered = appSettings.allowMeteredDownloads,
+          storageLocation = appSettings.storageLocation,
         ).onSuccess { onNotify("Downloading ${sub.language} (.srt)") }
       },
       onDismiss = { showSubtitleSheet = false },
@@ -1096,6 +1150,7 @@ fun MediaPlayerScreen(
       catalogRepository = catalogRepository,
       allowMetered = appSettings.allowMeteredDownloads,
       defaultIncludeSubs = appSettings.includeSubtitlesInBatch,
+      storageLocation = appSettings.storageLocation,
       notifyDownloads = appSettings.enableDownloadNotifications,
       onDismiss = { showBatchDownloadSheet = false },
       onNotify = onNotify,

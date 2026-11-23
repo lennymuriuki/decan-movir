@@ -66,6 +66,7 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.model.Movie
 import com.example.data.model.SavedMovieEntry
+import com.example.data.remote.AnimeSortMode
 import com.example.data.settings.ContinueWatchingEntry
 import com.example.ui.components.HeroSpotlightCard
 import com.example.ui.components.MoviePosterCard
@@ -84,6 +85,8 @@ fun DiscoverScreen(
   onRefresh: () -> Unit,
   onSelectMediaFilter: (MediaFilter) -> Unit,
   onSelectGenre: (String) -> Unit,
+  onSelectAnimeGenre: (String) -> Unit = {},
+  onSelectAnimeSort: (AnimeSortMode) -> Unit = {},
   onOpenMovie: (Movie) -> Unit,
   onPlayMovie: (Movie) -> Unit,
   onResumeWatching: (ContinueWatchingEntry) -> Unit,
@@ -123,25 +126,36 @@ fun DiscoverScreen(
         }
       MediaFilter.SERIES ->
         uiState.allMovies.filter { it.mediaType.equals("Series", ignoreCase = true) }
-      MediaFilter.ANIME ->
-        (uiState.anime +
-            uiState.allMovies.filter {
-              it.mediaType.equals("Anime", ignoreCase = true) ||
-                it.genre.contains("Animation", ignoreCase = true) ||
-                it.genre.contains("Anime", ignoreCase = true)
-            })
-          .distinctBy { it.id }
+      MediaFilter.ANIME -> {
+        val base = uiState.animeFeed.ifEmpty { uiState.anime }
+        val localExtras =
+          uiState.allMovies.filter {
+            it.mediaType.equals("Anime", ignoreCase = true) ||
+              it.genre.contains("Anime", ignoreCase = true)
+          }
+        val combinedAnime = (base + localExtras).distinctBy { it.id }
+        if (uiState.selectedAnimeGenre == "All") {
+          combinedAnime
+        } else {
+          combinedAnime.filter {
+            it.genre.contains(uiState.selectedAnimeGenre, ignoreCase = true)
+          }.ifEmpty { uiState.animeFeed }
+        }
+      }
       MediaFilter.RANKINGS ->
         (uiState.rankings.ifEmpty { uiState.allMovies.take(20) }).distinctBy { it.id }
     }
 
+  val isAnimeMode = uiState.selectedMediaFilter == MediaFilter.ANIME
   val isRankingsMode = uiState.selectedMediaFilter == MediaFilter.RANKINGS
   val isGridMode =
     !isRankingsMode &&
       (uiState.selectedGenre != "All" || uiState.selectedMediaFilter != MediaFilter.ALL)
 
   val filteredMovies =
-    if (uiState.selectedGenre == "All") {
+    if (isAnimeMode) {
+      mediaFiltered
+    } else if (uiState.selectedGenre == "All") {
       mediaFiltered
     } else {
       val localGenre =
@@ -425,7 +439,50 @@ fun DiscoverScreen(
           }
         }
 
-        if (!isRankingsMode) {
+        if (isAnimeMode) {
+          LazyRow(
+            contentPadding = PaddingValues(horizontal = 20.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            items(AnimeSortMode.entries, key = { it.name }) { mode ->
+              FilterChip(
+                selected = uiState.selectedAnimeSort == mode,
+                onClick = { onSelectAnimeSort(mode) },
+                label = { Text(mode.label, style = MaterialTheme.typography.labelLarge) },
+                colors =
+                  FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                  ),
+                modifier = Modifier.testTag("anime_sort_${mode.name}"),
+              )
+            }
+          }
+
+          LazyRow(
+            contentPadding = PaddingValues(horizontal = 20.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            items(uiState.availableAnimeGenres, key = { it }) { animeGenre ->
+              val selected = animeGenre == uiState.selectedAnimeGenre
+              FilterChip(
+                selected = selected,
+                onClick = { onSelectAnimeGenre(animeGenre) },
+                label = { Text(animeGenre, style = MaterialTheme.typography.labelLarge) },
+                colors =
+                  FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.primary,
+                    selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                  ),
+                modifier = Modifier.testTag("anime_genre_$animeGenre"),
+              )
+            }
+          }
+        } else if (!isRankingsMode) {
           LazyRow(
             contentPadding = PaddingValues(horizontal = 20.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -484,17 +541,32 @@ fun DiscoverScreen(
       isGridMode -> {
         item {
           val headerTitle =
-            buildString {
-              append(uiState.selectedMediaFilter.label)
-              if (uiState.selectedGenre != "All") append(" • ${uiState.selectedGenre}")
-              append(" (${filteredMovies.size})")
+            if (isAnimeMode) {
+              buildString {
+                append("Anime • ${uiState.selectedAnimeSort.label}")
+                if (uiState.selectedAnimeGenre != "All") append(" • ${uiState.selectedAnimeGenre}")
+                append(" (${filteredMovies.size})")
+              }
+            } else {
+              buildString {
+                append(uiState.selectedMediaFilter.label)
+                if (uiState.selectedGenre != "All") append(" • ${uiState.selectedGenre}")
+                append(" (${filteredMovies.size})")
+              }
             }
-          Text(
-            text = headerTitle,
-            style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.padding(horizontal = 20.dp),
-          )
+          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+              text = headerTitle,
+              style = MaterialTheme.typography.headlineSmall,
+              color = MaterialTheme.colorScheme.onBackground,
+              modifier = Modifier.padding(horizontal = 20.dp),
+            )
+            if (isAnimeMode && uiState.isLoadingAnime) {
+              LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+              )
+            }
+          }
         }
 
         items(filteredMovies.chunked(2), key = { row -> row.joinToString("_") { it.id } }) { rowMovies ->
@@ -503,11 +575,16 @@ fun DiscoverScreen(
             horizontalArrangement = Arrangement.spacedBy(14.dp),
           ) {
             for (movie in rowMovies) {
+              val rankBadge =
+                if (isAnimeMode && uiState.selectedAnimeSort == AnimeSortMode.TOP_RANKED) {
+                  movie.rankPosition ?: (filteredMovies.indexOfFirst { it.id == movie.id } + 1)
+                } else null
               MoviePosterCard(
                 movie = movie,
                 savedEntry = savedLibraryMap[movie.id],
                 onClick = { onOpenMovie(movie) },
                 onToggleWatchlist = { onToggleWatchlist(movie) },
+                rankOverride = rankBadge,
                 modifier = Modifier.weight(1f),
               )
             }

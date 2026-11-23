@@ -45,8 +45,11 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
-      - name: Ensure CI debug keystore exists
+      - name: Restore consistent debug keystore
         run: |
+          if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          fi
           if [ ! -f debug.keystore ]; then
             keytool -genkeypair -v \
               -keystore debug.keystore \
@@ -84,7 +87,8 @@ jobs:
             *) TAG="v${TAG}" ;;
           esac
           CLEAN_VER="${TAG#v}"
-          VER_CODE="${GITHUB_RUN_NUMBER:-1}"
+          RUN_NUM="${GITHUB_RUN_NUMBER:-1}"
+          VER_CODE=$((100 + RUN_NUM))
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version_name=${CLEAN_VER}" >> "$GITHUB_OUTPUT"
           echo "version_code=${VER_CODE}" >> "$GITHUB_OUTPUT"

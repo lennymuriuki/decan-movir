@@ -478,12 +478,44 @@ private fun DecanMainShell(
         latest.tagName != appSettings.lastNotifiedReleaseTag
     ) {
       settingsRepository.markReleaseTagNotified(latest.tagName)
+      val posterHint =
+        discoverState.spotlight.firstOrNull()?.posterUrl
+          ?: discoverState.rankings.firstOrNull()?.posterUrl
       DecanNotificationManager.notifyReleaseAvailable(
         context = context,
         tagName = latest.tagName,
         releaseTitle = latest.title,
         releaseUrl = latest.htmlUrl,
         systemEnabled = appSettings.enableReleaseNotifications,
+        imageUrl = posterHint,
+      )
+    }
+  }
+
+  // Trigger one rich cinema spotlight notification per day when live feed loads
+  LaunchedEffect(discoverState.spotlight, appSettings.enableTrendingNotifications) {
+    val spotlightMovie =
+      discoverState.rankings.firstOrNull { it.posterUrl.isNotBlank() }
+        ?: discoverState.spotlight.firstOrNull { it.posterUrl.isNotBlank() }
+        ?: return@LaunchedEffect
+    val prefs =
+      context.applicationContext.getSharedPreferences("decan_promo_prefs", Context.MODE_PRIVATE)
+    val todayBucket = System.currentTimeMillis() / (12L * 3600L * 1000L)
+    val promoKey = "${todayBucket}_${spotlightMovie.id}"
+    if (prefs.getString("last_promo_key", null) != promoKey) {
+      prefs.edit().putString("last_promo_key", promoKey).apply()
+      DecanNotificationManager.notifyTrendingPick(
+        context = context,
+        movieTitle = spotlightMovie.title,
+        movieId = spotlightMovie.id,
+        subtitle =
+          listOfNotNull(
+            spotlightMovie.genre.takeIf { it.isNotBlank() },
+            spotlightMovie.releaseYear.takeIf { it.isNotBlank() },
+            "Tap to watch in HD Theater Player",
+          ).joinToString(" • "),
+        systemEnabled = appSettings.enableTrendingNotifications,
+        imageUrl = spotlightMovie.posterUrl,
       )
     }
   }
@@ -610,6 +642,8 @@ private fun DecanMainShell(
                 onRefresh = discoverViewModel::refreshCatalog,
                 onSelectMediaFilter = discoverViewModel::selectMediaFilter,
                 onSelectGenre = discoverViewModel::selectGenre,
+                onSelectAnimeGenre = discoverViewModel::selectAnimeGenre,
+                onSelectAnimeSort = discoverViewModel::selectAnimeSort,
                 onOpenMovie = { movie -> navController.navigate(buildDetailRoute(movie.id)) },
                 onPlayMovie = { movie ->
                   val isSeries =
@@ -664,6 +698,8 @@ private fun DecanMainShell(
 
             composable(TopTab.DOWNLOADS.route) {
               DownloadsScreen(
+                storageLocation = appSettings.storageLocation,
+                onChangeStorageLocation = settingsRepository::setStorageLocation,
                 onPlayLocalFile = { localUri, title ->
                   navController.navigate(buildPlayerRoute(localUri = localUri, localTitle = title))
                 },
@@ -717,12 +753,14 @@ private fun DecanMainShell(
                 onSetDefaultPlaybackSpeed = settingsRepository::setDefaultPlaybackSpeed,
                 onSetAllowMeteredDownloads = settingsRepository::setAllowMeteredDownloads,
                 onSetIncludeSubtitlesInBatch = settingsRepository::setIncludeSubtitlesInBatch,
+                onSetStorageLocation = settingsRepository::setStorageLocation,
                 onSetEnableDownloadNotifications = settingsRepository::setEnableDownloadNotifications,
                 onSetEnableReleaseNotifications = settingsRepository::setEnableReleaseNotifications,
                 onSetEnableTrendingNotifications = settingsRepository::setEnableTrendingNotifications,
                 onSendTestNotification = {
                   val topPick =
-                    discoverState.rankings.firstOrNull()
+                    discoverState.rankings.firstOrNull { it.posterUrl.isNotBlank() }
+                      ?: discoverState.rankings.firstOrNull()
                       ?: discoverState.spotlight.firstOrNull()
                   if (topPick != null) {
                     DecanNotificationManager.notifyTrendingPick(
@@ -732,6 +770,7 @@ private fun DecanMainShell(
                       subtitle =
                         "${topPick.genre} • ${topPick.releaseYear} — Watch in HD Theater Player now.",
                       systemEnabled = appSettings.enableTrendingNotifications,
+                      imageUrl = topPick.posterUrl,
                     )
                     onNotify("Sent alert for ${topPick.title}")
                   } else {
@@ -746,6 +785,12 @@ private fun DecanMainShell(
                   }
                 },
                 onCheckUpdates = { updateViewModel.checkForUpdates(appSettings.githubRepo) },
+                onDownloadInstallUpdate = { apkUrl, fallbackUrl, tag ->
+                  updateViewModel.downloadAndInstallApk(context, apkUrl, fallbackUrl, tag, onNotify)
+                },
+                onInstallDownloadedApk = { path ->
+                  updateViewModel.launchApkInstaller(context, java.io.File(path), onNotify)
+                },
                 onNotify = onNotify,
                 modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
               )
@@ -763,6 +808,8 @@ private fun DecanMainShell(
                 catalogRepository = catalogRepository,
                 allowMeteredDownloads = appSettings.allowMeteredDownloads,
                 includeSubtitlesInBatch = appSettings.includeSubtitlesInBatch,
+                storageLocation = appSettings.storageLocation,
+                onChangeStorageLocation = settingsRepository::setStorageLocation,
                 notifyDownloads = appSettings.enableDownloadNotifications,
                 isSaving = isSavingLibrary,
                 onBack = { navController.popBackStack() },
