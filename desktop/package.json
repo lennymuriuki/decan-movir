@@ -1,0 +1,70 @@
+{
+  "name": "decan-movie-desktop",
+  "version": "1.0.0",
+  "description": "Decan Movie Windows desktop application",
+  "main": "src/main.js",
+  "author": "Lenny Muriuki — Decan Konnect",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --enable-logging",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/renderer.js",
+    "dist:win": "electron-builder --win nsis portable --x64",
+    "dist:portable": "electron-builder --win portable --x64",
+    "dist:installer": "electron-builder --win nsis --x64"
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2"
+  },
+  "devDependencies": {
+    "electron": "^39.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "co.ke.decankonnect.decanmovie.desktop",
+    "productName": "Decan Movie",
+    "artifactName": "Decan-Movie-${version}-${arch}.${ext}",
+    "asar": true,
+    "compression": "maximum",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "extraMetadata": {
+      "name": "decan-movie-desktop"
+    },
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ],
+      "icon": "build/icon.ico",
+      "publisherName": "Decan Konnect",
+      "verifyUpdateCodeSignature": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Decan Movie",
+      "uninstallDisplayName": "Decan Movie",
+      "deleteAppDataOnUninstall": false
+    },
+    "portable": {
+      "artifactName": "Decan-Movie-${version}-Portable.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "lennymuriuki",
+      "repo": "decan-movir",
+      "releaseType": "release"
+    }
+  }
+}
