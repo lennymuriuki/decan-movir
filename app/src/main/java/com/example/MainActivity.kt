@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.cache.MediaResourceCacheManager
 import com.example.data.settings.AppSettingsRepository
 import com.example.data.settings.AppThemeMode
 import com.example.notifications.DecanNotificationManager
@@ -27,6 +28,7 @@ class MainActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    MediaResourceCacheManager.installCoilImageLoader(applicationContext)
     DecanNotificationManager.ensureInitialized(applicationContext)
     consumeDeepLink(intent)
     enableEdgeToEdge()

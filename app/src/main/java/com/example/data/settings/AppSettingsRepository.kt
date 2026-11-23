@@ -35,9 +35,23 @@ data class AppSettings(
   val lastNotifiedReleaseTag: String = "",
   val githubRepo: String = DEFAULT_GITHUB_REPO,
   val skippedSignIn: Boolean = false,
+  val autoCheckUpdates: Boolean = true,
+  val lastUpdateCheckMs: Long = 0L,
+  val dismissedReleaseTag: String = "",
 ) {
   companion object {
-    const val DEFAULT_GITHUB_REPO = "lennymuriuki4/decan-movir"
+    const val DEFAULT_GITHUB_REPO = "lennymuriuki/decan-movir"
+    private const val LEGACY_GITHUB_REPO = "lennymuriuki4/decan-movir"
+    const val UPDATE_CHECK_COOLDOWN_MS = 6L * 3600L * 1000L
+
+    internal fun normalizeRepoSlug(raw: String?): String {
+      val clean = raw?.trim().orEmpty().removePrefix("https://github.com/").trim('/')
+      return when {
+        clean.isBlank() -> DEFAULT_GITHUB_REPO
+        clean.equals(LEGACY_GITHUB_REPO, ignoreCase = true) -> DEFAULT_GITHUB_REPO
+        else -> clean
+      }
+    }
   }
 }
 
@@ -55,6 +69,11 @@ class AppSettingsRepository(context: Context) {
     val storage =
       DownloadStorageLocation.entries.firstOrNull { it.name == storageName }
         ?: DownloadStorageLocation.PUBLIC_DOWNLOADS
+    val storedRepo = prefs.getString(KEY_GITHUB_REPO, null)
+    val normalizedRepo = AppSettings.normalizeRepoSlug(storedRepo)
+    if (storedRepo != normalizedRepo) {
+      prefs.edit().putString(KEY_GITHUB_REPO, normalizedRepo).apply()
+    }
     return AppSettings(
       themeMode = theme,
       preferredQuality = prefs.getInt(KEY_QUALITY, 1080),
@@ -68,10 +87,11 @@ class AppSettingsRepository(context: Context) {
       enableReleaseNotifications = prefs.getBoolean(KEY_NOTIF_RELEASES, true),
       enableTrendingNotifications = prefs.getBoolean(KEY_NOTIF_TRENDING, true),
       lastNotifiedReleaseTag = prefs.getString(KEY_LAST_NOTIFIED_TAG, "").orEmpty(),
-      githubRepo =
-        prefs.getString(KEY_GITHUB_REPO, AppSettings.DEFAULT_GITHUB_REPO)
-          ?.takeIf { it.isNotBlank() } ?: AppSettings.DEFAULT_GITHUB_REPO,
+      githubRepo = normalizedRepo,
       skippedSignIn = prefs.getBoolean(KEY_SKIPPED_SIGN_IN, false),
+      autoCheckUpdates = prefs.getBoolean(KEY_AUTO_CHECK_UPDATES, true),
+      lastUpdateCheckMs = prefs.getLong(KEY_LAST_UPDATE_CHECK_MS, 0L),
+      dismissedReleaseTag = prefs.getString(KEY_DISMISSED_RELEASE_TAG, "").orEmpty(),
     )
   }
 
@@ -136,8 +156,7 @@ class AppSettingsRepository(context: Context) {
   }
 
   fun setGithubRepo(repo: String) {
-    val clean = repo.trim().removePrefix("https://github.com/").trim('/')
-    val finalRepo = clean.ifBlank { AppSettings.DEFAULT_GITHUB_REPO }
+    val finalRepo = AppSettings.normalizeRepoSlug(repo)
     prefs.edit().putString(KEY_GITHUB_REPO, finalRepo).apply()
     _settings.update { it.copy(githubRepo = finalRepo) }
   }
@@ -146,6 +165,38 @@ class AppSettingsRepository(context: Context) {
     prefs.edit().putBoolean(KEY_SKIPPED_SIGN_IN, skipped).apply()
     _settings.update { it.copy(skippedSignIn = skipped) }
   }
+
+  fun setAutoCheckUpdates(enabled: Boolean) {
+    prefs.edit().putBoolean(KEY_AUTO_CHECK_UPDATES, enabled).apply()
+    _settings.update { it.copy(autoCheckUpdates = enabled) }
+  }
+
+  fun markUpdateCheckedNow(nowMs: Long = System.currentTimeMillis()) {
+    prefs.edit().putLong(KEY_LAST_UPDATE_CHECK_MS, nowMs).apply()
+    _settings.update { it.copy(lastUpdateCheckMs = nowMs) }
+  }
+
+  fun shouldAutoCheckUpdates(
+    nowMs: Long = System.currentTimeMillis(),
+    cooldownMs: Long = AppSettings.UPDATE_CHECK_COOLDOWN_MS,
+  ): Boolean {
+    val cur = _settings.value
+    if (!cur.autoCheckUpdates) return false
+    if (cur.lastUpdateCheckMs <= 0L) return true
+    return (nowMs - cur.lastUpdateCheckMs) >= cooldownMs
+  }
+
+  fun dismissReleaseDialogForTag(tagName: String) {
+    prefs.edit().putString(KEY_DISMISSED_RELEASE_TAG, tagName).apply()
+    _settings.update { it.copy(dismissedReleaseTag = tagName) }
+  }
+
+  fun saveCachedReleaseJson(json: String) {
+    prefs.edit().putString(KEY_CACHED_RELEASE_JSON, json).apply()
+  }
+
+  fun getCachedReleaseJson(): String? =
+    prefs.getString(KEY_CACHED_RELEASE_JSON, null)?.takeIf { it.isNotBlank() }
 
   private companion object {
     const val KEY_THEME = "theme_mode"
@@ -162,5 +213,9 @@ class AppSettingsRepository(context: Context) {
     const val KEY_LAST_NOTIFIED_TAG = "last_notified_tag"
     const val KEY_GITHUB_REPO = "github_repo"
     const val KEY_SKIPPED_SIGN_IN = "skipped_sign_in"
+    const val KEY_AUTO_CHECK_UPDATES = "auto_check_updates"
+    const val KEY_LAST_UPDATE_CHECK_MS = "last_update_check_ms"
+    const val KEY_DISMISSED_RELEASE_TAG = "dismissed_release_tag"
+    const val KEY_CACHED_RELEASE_JSON = "cached_release_json"
   }
 }

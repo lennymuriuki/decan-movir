@@ -76,6 +76,7 @@ import com.example.auth.AuthScreen
 import com.example.auth.signOut
 import com.example.data.download.StreamDownloadManager
 import com.example.data.firebase.MovieLibraryRepository
+import com.example.data.model.DramaExperienceDetector
 import com.example.data.model.Movie
 import com.example.data.model.SavedMovieEntry
 import com.example.data.model.UserProfile
@@ -87,6 +88,7 @@ import com.example.data.settings.LocalLibraryStore
 import com.example.data.settings.PlaybackProgressStore
 import com.example.notifications.DecanNotificationManager
 import com.example.ui.components.NotificationCenterSheet
+import com.example.ui.components.UpdateAvailableDialog
 import com.example.ui.screens.DiscoverScreen
 import com.example.ui.screens.DownloadsScreen
 import com.example.ui.screens.LibraryScreen
@@ -94,6 +96,7 @@ import com.example.ui.screens.MediaPlayerScreen
 import com.example.ui.screens.MovieDetailScreen
 import com.example.ui.screens.SearchScreen
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.VerticalDramaPlayerScreen
 import com.example.ui.viewmodel.DiscoverViewModel
 import com.example.ui.viewmodel.LibraryFilter
 import com.example.ui.viewmodel.LibraryUiState
@@ -124,6 +127,8 @@ private enum class TopTab(
 private const val ROUTE_DETAIL = "detail/{movieId}"
 private const val ROUTE_PLAYER =
   "player?movieId={movieId}&se={se}&ep={ep}&pos={pos}&localUri={localUri}&localTitle={localTitle}"
+private const val ROUTE_DRAMA_PLAYER =
+  "drama_player?movieId={movieId}&se={se}&ep={ep}&pos={pos}"
 
 private fun buildDetailRoute(movieId: String): String = "detail/${Uri.encode(movieId)}"
 
@@ -136,6 +141,15 @@ private fun buildPlayerRoute(
   localTitle: String = "",
 ): String {
   return "player?movieId=${Uri.encode(movieId)}&se=$season&ep=$episode&pos=$positionMs&localUri=${Uri.encode(localUri)}&localTitle=${Uri.encode(localTitle)}"
+}
+
+private fun buildDramaPlayerRoute(
+  movieId: String,
+  season: Int = 1,
+  episode: Int = 1,
+  positionMs: Long = 0L,
+): String {
+  return "drama_player?movieId=${Uri.encode(movieId)}&se=${season.coerceAtLeast(1)}&ep=${episode.coerceAtLeast(1)}&pos=$positionMs"
 }
 
 @Composable
@@ -231,7 +245,9 @@ private fun GuestDecanApp(
   val updateViewModel: UpdateViewModel =
     viewModel(
       key = "updates_guest",
-      factory = viewModelFactory { initializer { UpdateViewModel() } },
+      factory = viewModelFactory {
+        initializer { UpdateViewModel(settingsRepository = settingsRepository) }
+      },
     )
 
   val localEntries by localLibraryStore.entries.collectAsStateWithLifecycle()
@@ -314,7 +330,9 @@ private fun AuthenticatedDecanApp(
   val updateViewModel: UpdateViewModel =
     viewModel(
       key = "updates_${user.uid}",
-      factory = viewModelFactory { initializer { UpdateViewModel() } },
+      factory = viewModelFactory {
+        initializer { UpdateViewModel(settingsRepository = settingsRepository) }
+      },
     )
   val libraryViewModel: LibraryViewModel =
     viewModel(
@@ -476,7 +494,7 @@ private fun DecanMainShell(
   LaunchedEffect(Unit) {
     DecanNotificationManager.ensureInitialized(context)
     if (!updateState.checkedOnce) {
-      updateViewModel.checkForUpdates(appSettings.githubRepo)
+      updateViewModel.checkForUpdatesIfDue(appSettings.githubRepo)
     }
   }
 
@@ -660,24 +678,46 @@ private fun DecanMainShell(
                 onPlayMovie = { movie ->
                   val isSeries =
                     movie.mediaType.equals("Series", ignoreCase = true) ||
-                      movie.mediaType.equals("Anime", ignoreCase = true)
-                  navController.navigate(
-                    buildPlayerRoute(
-                      movieId = movie.id,
-                      season = if (isSeries) 1 else 0,
-                      episode = if (isSeries) 1 else 0,
+                      movie.mediaType.equals("Anime", ignoreCase = true) ||
+                      movie.mediaType.equals("Drama", ignoreCase = true)
+                  if (DramaExperienceDetector.isEpisodicDrama(movie)) {
+                    navController.navigate(
+                      buildDramaPlayerRoute(movieId = movie.id, season = 1, episode = 1)
                     )
-                  )
+                  } else {
+                    navController.navigate(
+                      buildPlayerRoute(
+                        movieId = movie.id,
+                        season = if (isSeries) 1 else 0,
+                        episode = if (isSeries) 1 else 0,
+                      )
+                    )
+                  }
                 },
                 onResumeWatching = { cw ->
-                  navController.navigate(
-                    buildPlayerRoute(
-                      movieId = cw.movieId,
-                      season = cw.season,
-                      episode = cw.episode,
-                      positionMs = cw.positionMs,
+                  val cachedMovie = catalogRepository.getCachedMovie(cw.movieId)
+                  val isDrama =
+                    DramaExperienceDetector.isEpisodicDrama(cachedMovie) ||
+                      cw.mediaType.equals("Drama", ignoreCase = true)
+                  if (isDrama && cw.season > 0 && cw.episode > 0) {
+                    navController.navigate(
+                      buildDramaPlayerRoute(
+                        movieId = cw.movieId,
+                        season = cw.season,
+                        episode = cw.episode,
+                        positionMs = cw.positionMs,
+                      )
                     )
-                  )
+                  } else {
+                    navController.navigate(
+                      buildPlayerRoute(
+                        movieId = cw.movieId,
+                        season = cw.season,
+                        episode = cw.episode,
+                        positionMs = cw.positionMs,
+                      )
+                    )
+                  }
                 },
                 onRemoveContinueWatching = progressStore::removeProgress,
                 onToggleWatchlist = onToggleQuickWatchlist,
@@ -769,6 +809,7 @@ private fun DecanMainShell(
                 onSetEnableDownloadNotifications = settingsRepository::setEnableDownloadNotifications,
                 onSetEnableReleaseNotifications = settingsRepository::setEnableReleaseNotifications,
                 onSetEnableTrendingNotifications = settingsRepository::setEnableTrendingNotifications,
+                onSetAutoCheckUpdates = settingsRepository::setAutoCheckUpdates,
                 onSendTestNotification = {
                   val topPick =
                     discoverState.rankings.firstOrNull { it.posterUrl.isNotBlank() }
@@ -796,9 +837,21 @@ private fun DecanMainShell(
                     onNotify("Sent test cinema alert")
                   }
                 },
-                onCheckUpdates = { updateViewModel.checkForUpdates(appSettings.githubRepo) },
-                onDownloadInstallUpdate = { apkUrl, fallbackUrl, tag ->
-                  updateViewModel.downloadAndInstallApk(context, apkUrl, fallbackUrl, tag, onNotify)
+                onCheckUpdates = {
+                  updateViewModel.checkForUpdates(appSettings.githubRepo, manualTrigger = true)
+                },
+                onDownloadInstallUpdate = { asset, fallbackUrl, tag ->
+                  if (asset != null) {
+                    updateViewModel.downloadAndInstallApk(
+                      context = context,
+                      apkUrl = asset.downloadUrl,
+                      fallbackWebUrl = fallbackUrl,
+                      versionTag = tag,
+                      expectedSha256 = asset.sha256,
+                      autoLaunchInstaller = true,
+                      onNotify = onNotify,
+                    )
+                  }
                 },
                 onInstallDownloadedApk = { path ->
                   updateViewModel.launchApkInstaller(context, java.io.File(path), onNotify)
@@ -833,6 +886,11 @@ private fun DecanMainShell(
                 onOpenPlayer = { movie, se, ep ->
                   navController.navigate(
                     buildPlayerRoute(movieId = movie.id, season = se, episode = ep)
+                  )
+                },
+                onOpenDramaPlayer = { movie, se, ep ->
+                  navController.navigate(
+                    buildDramaPlayerRoute(movieId = movie.id, season = se, episode = ep)
                   )
                 },
                 onOpenMovie = { rec -> navController.navigate(buildDetailRoute(rec.id)) },
@@ -912,10 +970,95 @@ private fun DecanMainShell(
                 onNotify = onNotify,
               )
             }
+
+            composable(
+              route = ROUTE_DRAMA_PLAYER,
+              arguments =
+                listOf(
+                  navArgument("movieId") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                  },
+                  navArgument("se") {
+                    type = NavType.IntType
+                    defaultValue = 1
+                  },
+                  navArgument("ep") {
+                    type = NavType.IntType
+                    defaultValue = 1
+                  },
+                  navArgument("pos") {
+                    type = NavType.LongType
+                    defaultValue = 0L
+                  },
+                ),
+            ) { entry ->
+              val rawMovieId = entry.arguments?.getString("movieId").orEmpty()
+              val se = entry.arguments?.getInt("se") ?: 1
+              val ep = entry.arguments?.getInt("ep") ?: 1
+              val pos = entry.arguments?.getLong("pos") ?: 0L
+              val decodedMovieId = remember(rawMovieId) { Uri.decode(rawMovieId) }
+
+              VerticalDramaPlayerScreen(
+                movieId = decodedMovieId,
+                initialSeason = se,
+                initialEpisode = ep,
+                initialPositionMs = pos,
+                savedEntry =
+                  savedLibraryMap[decodedMovieId] ?: savedLibraryMap[Movie.sanitizeId(decodedMovieId)],
+                catalogRepository = catalogRepository,
+                appSettings = appSettings,
+                progressStore = progressStore,
+                onBack = { navController.popBackStack() },
+                onOpenStandardTheater = { targetId, season, episode, positionMs ->
+                  navController.navigate(
+                    buildPlayerRoute(
+                      movieId = targetId,
+                      season = season,
+                      episode = episode,
+                      positionMs = positionMs,
+                    )
+                  ) {
+                    popUpTo(ROUTE_DRAMA_PLAYER) { inclusive = true }
+                  }
+                },
+                onToggleWatchlist = onToggleQuickWatchlist,
+                onSaveFavorite = onSaveEntryDetails,
+                onNotify = onNotify,
+              )
+            }
           }
         }
       }
     }
+  }
+
+  if (updateState.showUpdateDialog && updateState.hasUpdate) {
+    UpdateAvailableDialog(
+      updateState = updateState,
+      onDownloadUpdate = { asset, release ->
+        if (asset != null) {
+          updateViewModel.downloadAndInstallApk(
+            context = context,
+            apkUrl = asset.downloadUrl,
+            fallbackWebUrl = release.htmlUrl,
+            versionTag = release.tagName,
+            expectedSha256 = asset.sha256,
+            autoLaunchInstaller = false,
+            onNotify = onNotify,
+          )
+        } else {
+          runCatching {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(release.htmlUrl)))
+          }.onFailure { onNotify("Could not open release page") }
+        }
+      },
+      onInstallUpdate = { apkPath ->
+        updateViewModel.launchApkInstaller(context, java.io.File(apkPath), onNotify)
+      },
+      onLater = { updateViewModel.dismissUpdatePrompt() },
+      onNotify = onNotify,
+    )
   }
 
   if (showNotificationSheet) {

@@ -34,8 +34,36 @@ class PlaybackProgressStore(context: Context) {
   private val _items = MutableStateFlow(readAll())
   val items: StateFlow<List<ContinueWatchingEntry>> = _items.asStateFlow()
 
+  private val episodePositions: MutableMap<String, Long> = readEpisodePositions()
+
   fun getProgress(movieId: String): ContinueWatchingEntry? =
     _items.value.firstOrNull { it.movieId == movieId }
+
+  fun getEpisodeProgress(movieId: String, season: Int, episode: Int): Long {
+    if (movieId.isBlank() || season <= 0 || episode <= 0) return 0L
+    return episodePositions[episodeKey(movieId, season, episode)] ?: 0L
+  }
+
+  fun saveEpisodeProgress(
+    movieId: String,
+    season: Int,
+    episode: Int,
+    positionMs: Long,
+    durationMs: Long,
+  ) {
+    if (movieId.isBlank() || season <= 0 || episode <= 0) return
+    val key = episodeKey(movieId, season, episode)
+    if (durationMs > 20_000L && positionMs.toFloat() / durationMs.toFloat() > 0.96f) {
+      episodePositions.remove(key)
+    } else if (positionMs >= 2_000L) {
+      episodePositions[key] = positionMs
+    }
+    if (episodePositions.size > MAX_EPISODE_ENTRIES) {
+      val keysToDrop = episodePositions.keys.take(episodePositions.size - MAX_EPISODE_ENTRIES)
+      keysToDrop.forEach { episodePositions.remove(it) }
+    }
+    writeEpisodePositions(episodePositions)
+  }
 
   fun saveProgress(
     movieId: String,
@@ -47,7 +75,11 @@ class PlaybackProgressStore(context: Context) {
     positionMs: Long,
     durationMs: Long,
   ) {
-    if (movieId.isBlank() || positionMs < 3_000L) return
+    if (movieId.isBlank()) return
+    if (season > 0 && episode > 0) {
+      saveEpisodeProgress(movieId, season, episode, positionMs, durationMs)
+    }
+    if (positionMs < 3_000L) return
     // If within last 15 seconds of a standalone movie (> 95% watched), remove from Continue Watching
     if (season == 0 && durationMs > 30_000L && positionMs.toFloat() / durationMs.toFloat() > 0.96f) {
       removeProgress(movieId)
@@ -76,6 +108,30 @@ class PlaybackProgressStore(context: Context) {
     val next = _items.value.filterNot { it.movieId == movieId }
     writeAll(next)
     _items.value = next
+  }
+
+  private fun episodeKey(movieId: String, season: Int, episode: Int): String =
+    "${movieId}__s${season}_e${episode}"
+
+  private fun readEpisodePositions(): MutableMap<String, Long> {
+    val raw = prefs.getString(KEY_EPISODE_POSITIONS, null) ?: return LinkedHashMap()
+    return runCatching {
+      val obj = JSONObject(raw)
+      val map = LinkedHashMap<String, Long>()
+      val keys = obj.keys()
+      while (keys.hasNext()) {
+        val k = keys.next()
+        val v = obj.optLong(k, 0L)
+        if (v > 0L) map[k] = v
+      }
+      map
+    }.getOrDefault(LinkedHashMap())
+  }
+
+  private fun writeEpisodePositions(map: Map<String, Long>) {
+    val obj = JSONObject()
+    map.forEach { (k, v) -> obj.put(k, v) }
+    prefs.edit().putString(KEY_EPISODE_POSITIONS, obj.toString()).apply()
   }
 
   private fun readAll(): List<ContinueWatchingEntry> {
@@ -127,5 +183,7 @@ class PlaybackProgressStore(context: Context) {
 
   private companion object {
     const val KEY_ITEMS = "continue_watching_json"
+    const val KEY_EPISODE_POSITIONS = "episode_positions_json"
+    const val MAX_EPISODE_ENTRIES = 120
   }
 }

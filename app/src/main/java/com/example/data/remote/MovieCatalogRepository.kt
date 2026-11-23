@@ -760,8 +760,45 @@ class MovieCatalogRepository(
     }.getOrDefault(emptyList())
   }
 
-  suspend fun fetchSubtitleCues(subtitleUrl: String): List<SubtitleCue> =
-    runCatching { movieBox.fetchSubtitleCues(subtitleUrl) }.getOrDefault(emptyList())
+  private val subtitleCuesCache = ConcurrentHashMap<String, Pair<Long, List<SubtitleCue>>>()
+
+  suspend fun fetchSubtitleCues(subtitleUrl: String): List<SubtitleCue> {
+    if (subtitleUrl.isBlank()) return emptyList()
+    val hit = subtitleCuesCache[subtitleUrl]
+    if (hit != null && (System.currentTimeMillis() - hit.first) < DETAIL_CACHE_TTL_MS) {
+      return hit.second
+    }
+    return runCatching {
+      movieBox.fetchSubtitleCues(subtitleUrl).also { cues ->
+        if (cues.isNotEmpty()) {
+          subtitleCuesCache[subtitleUrl] = System.currentTimeMillis() to cues
+        }
+      }
+    }.getOrDefault(emptyList())
+  }
+
+  /**
+   * Prefetches streams, subtitles, and default English cues for upcoming episodes
+   * (e.g., currentPage + 1 in the Vertical Drama Player) without buffering full video blobs.
+   */
+  suspend fun preloadEpisodeResources(
+    subjectId: String,
+    season: Int,
+    episode: Int,
+    detailPath: String? = null,
+    preloadEnglishCues: Boolean = true,
+  ) = coroutineScope {
+    if (subjectId.isBlank() || season <= 0 || episode <= 0) return@coroutineScope
+    val streamsDef = async { runCatching { getStreams(subjectId, season, episode, detailPath) }.getOrNull() }
+    val subsDef = async { runCatching { getSubtitles(subjectId, season, episode) }.getOrDefault(emptyList()) }
+    streamsDef.await()
+    val subs = subsDef.await()
+    if (preloadEnglishCues && subs.isNotEmpty()) {
+      val preferred =
+        subs.firstOrNull { it.language.contains("English", ignoreCase = true) } ?: subs.first()
+      runCatching { fetchSubtitleCues(preferred.url) }
+    }
+  }
 
   fun getCachedMovie(movieId: String): Movie? =
     cache[movieId] ?: OfflineCatalogFallback.movies.firstOrNull { it.id == movieId }

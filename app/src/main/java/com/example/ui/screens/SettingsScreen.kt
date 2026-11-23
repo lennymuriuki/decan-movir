@@ -68,11 +68,16 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.BuildConfig
 import com.example.auth.GoogleSignInButton
+import com.example.data.remote.GitHubReleaseAsset
+import com.example.data.remote.GitHubUpdateRepository
 import com.example.data.settings.AppSettings
 import com.example.data.settings.AppThemeMode
 import com.example.data.settings.DownloadStorageLocation
 import com.example.notifications.DecanNotificationManager
 import com.example.ui.viewmodel.UpdateUiState
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -97,9 +102,10 @@ fun SettingsScreen(
   onSetEnableDownloadNotifications: (Boolean) -> Unit,
   onSetEnableReleaseNotifications: (Boolean) -> Unit,
   onSetEnableTrendingNotifications: (Boolean) -> Unit,
+  onSetAutoCheckUpdates: (Boolean) -> Unit = {},
   onSendTestNotification: () -> Unit,
   onCheckUpdates: () -> Unit,
-  onDownloadInstallUpdate: (apkUrl: String, fallbackUrl: String, tag: String) -> Unit = { apkUrl, _, _ -> },
+  onDownloadInstallUpdate: (asset: GitHubReleaseAsset?, fallbackUrl: String, tag: String) -> Unit = { _, _, _ -> },
   onInstallDownloadedApk: (String) -> Unit = {},
   onNotify: (String) -> Unit,
   modifier: Modifier = Modifier,
@@ -308,12 +314,18 @@ fun SettingsScreen(
       }
     }
 
-    // App Updates Card
+    // Application Updates Card
     item {
+      var showFullReleaseNotes by remember { mutableStateOf(false) }
+      val effectiveLastCheckMs =
+        maxOf(updateState.lastCheckedAtMs, appSettings.lastUpdateCheckMs)
+      val formattedLastCheck =
+        remember(effectiveLastCheckMs) { formatUpdateTimestamp(effectiveLastCheckMs) }
+
       Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
         shape = MaterialTheme.shapes.large,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().testTag("application_updates_card"),
       ) {
         Column(
           modifier = Modifier.padding(16.dp),
@@ -329,11 +341,86 @@ fun SettingsScreen(
               tint = MaterialTheme.colorScheme.primary,
             )
             Text(
-              text = "App Updates",
+              text = "Application Updates",
               style = MaterialTheme.typography.titleMedium,
               color = MaterialTheme.colorScheme.onSurface,
             )
           }
+
+          Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Column(
+              modifier = Modifier.padding(12.dp),
+              verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+              ) {
+                Text(
+                  text = "Installed version",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                  text = "v${BuildConfig.VERSION_NAME}",
+                  style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                  color = MaterialTheme.colorScheme.onSurface,
+                  modifier = Modifier.testTag("settings_installed_version"),
+                )
+              }
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+              ) {
+                Text(
+                  text = "Latest available",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                  text =
+                    when {
+                      updateState.isChecking -> "Checking…"
+                      updateState.latestRelease != null -> updateState.latestRelease.tagName
+                      else -> "Not checked yet"
+                    },
+                  style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                  color =
+                    if (updateState.hasUpdate) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurface,
+                  modifier = Modifier.testTag("settings_latest_version"),
+                )
+              }
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+              ) {
+                Text(
+                  text = "Last update check",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                  text = formattedLastCheck,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  modifier = Modifier.testTag("settings_last_update_check"),
+                )
+              }
+            }
+          }
+
+          SettingToggleRow(
+            title = "Automatic Update Checking",
+            subtitle = "Check GitHub releases automatically when opening Decan Movie",
+            checked = appSettings.autoCheckUpdates,
+            onCheckedChange = onSetAutoCheckUpdates,
+            toggleTestTag = "auto_check_updates_switch",
+          )
 
           Button(
             onClick = onCheckUpdates,
@@ -362,6 +449,15 @@ fun SettingsScreen(
 
           val latest = updateState.latestRelease
           if (latest != null) {
+            val preferredAsset =
+              GitHubUpdateRepository.selectCompatibleApkAsset(
+                assets = latest.assets,
+                isDebugBuild = BuildConfig.DEBUG,
+              )
+            val isDownloadedForLatest =
+              !updateState.downloadedApkPath.isNullOrBlank() &&
+                updateState.downloadedReleaseTag == latest.tagName
+
             Surface(
               color =
                 if (latest.isNewerThanCurrent) MaterialTheme.colorScheme.primaryContainer
@@ -371,7 +467,7 @@ fun SettingsScreen(
             ) {
               Column(
                 modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
               ) {
                 Row(
                   verticalAlignment = Alignment.CenterVertically,
@@ -386,7 +482,7 @@ fun SettingsScreen(
                   Text(
                     text =
                       if (latest.isNewerThanCurrent) "Update Available: ${latest.tagName}"
-                      else "Up to date (${latest.tagName})",
+                      else "You're up to date (${latest.tagName})",
                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                     color = MaterialTheme.colorScheme.onSurface,
                   )
@@ -394,19 +490,21 @@ fun SettingsScreen(
 
                 if (latest.changelog.isNotBlank()) {
                   Text(
-                    text = latest.changelog.take(260),
+                    text =
+                      if (showFullReleaseNotes) latest.changelog
+                      else latest.changelog.take(260),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                   )
                 }
 
-                val preferredApkUrl =
-                  selectCompatibleApkAsset(latest.assets)?.downloadUrl
-                if (latest.assets.isNotEmpty()) {
-                  val assetNames =
-                    latest.assets.joinToString(", ") { "${it.name} (${it.sizeMb} MB)" }
+                if (preferredAsset != null) {
+                  val sizeText =
+                    if (preferredAsset.sizeMb > 0.0) " (${preferredAsset.sizeMb} MB)" else ""
+                  val shaBadge =
+                    if (!preferredAsset.sha256.isNullOrBlank()) " • SHA-256 Verified" else ""
                   Text(
-                    text = "Package: $assetNames",
+                    text = "Package: ${preferredAsset.name}$sizeText$shaBadge",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
                   )
@@ -419,12 +517,11 @@ fun SettingsScreen(
                   )
                   Text(
                     text =
-                      updateState.installStatusMessage
-                        ?: "Downloading update (${(updateState.downloadProgress * 100).toInt()}%)…",
+                      "Downloading update (${(updateState.downloadProgress * 100).toInt()}%)…",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
                   )
-                } else if (!updateState.downloadedApkPath.isNullOrBlank()) {
+                } else if (isDownloadedForLatest && !updateState.downloadedApkPath.isNullOrBlank()) {
                   Button(
                     onClick = { onInstallDownloadedApk(updateState.downloadedApkPath) },
                     shape = MaterialTheme.shapes.medium,
@@ -436,13 +533,13 @@ fun SettingsScreen(
                       modifier = Modifier.size(16.dp),
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Tap to Install APK (${latest.tagName})")
+                    Text("Install Update (${latest.tagName})")
                   }
-                } else {
+                } else if (latest.isNewerThanCurrent) {
                   FilledTonalButton(
                     onClick = {
-                      if (preferredApkUrl != null) {
-                        onDownloadInstallUpdate(preferredApkUrl, latest.htmlUrl, latest.tagName)
+                      if (preferredAsset != null) {
+                        onDownloadInstallUpdate(preferredAsset, latest.htmlUrl, latest.tagName)
                       } else {
                         runCatching {
                           context.startActivity(
@@ -456,16 +553,54 @@ fun SettingsScreen(
                   ) {
                     Icon(
                       imageVector =
-                        if (preferredApkUrl != null) Icons.Filled.SystemUpdate
+                        if (preferredAsset != null) Icons.Filled.SystemUpdate
                         else Icons.AutoMirrored.Filled.OpenInNew,
                       contentDescription = null,
                       modifier = Modifier.size(16.dp),
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                      if (preferredApkUrl != null) "Download & Install Update"
+                      if (preferredAsset != null) "Download Update"
                       else "View Update Details"
                     )
+                  }
+                }
+
+                if (!updateState.downloadErrorMessage.isNullOrBlank()) {
+                  Text(
+                    text = updateState.downloadErrorMessage,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                  )
+                }
+
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                  if (latest.changelog.length > 260) {
+                    OutlinedButton(
+                      onClick = { showFullReleaseNotes = !showFullReleaseNotes },
+                      shape = MaterialTheme.shapes.medium,
+                      modifier = Modifier.weight(1f),
+                    ) {
+                      Text(if (showFullReleaseNotes) "Show Less" else "Release Notes")
+                    }
+                  }
+                  if (latest.htmlUrl.isNotBlank()) {
+                    OutlinedButton(
+                      onClick = {
+                        runCatching {
+                          context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(latest.htmlUrl))
+                          )
+                        }.onFailure { onNotify("Could not open GitHub release") }
+                      },
+                      shape = MaterialTheme.shapes.medium,
+                      modifier = Modifier.weight(1f).testTag("settings_view_release_notes_button"),
+                    ) {
+                      Text("View Release Notes")
+                    }
                   }
                 }
               }
@@ -478,7 +613,7 @@ fun SettingsScreen(
             )
           } else if (updateState.errorMessage != null) {
             Text(
-              text = "Updates unavailable right now.",
+              text = updateState.errorMessage,
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -492,7 +627,11 @@ fun SettingsScreen(
               color = MaterialTheme.colorScheme.onSurface,
             )
             updateState.recentReleases.take(4).forEach { rel ->
-              val relApkUrl = selectCompatibleApkAsset(rel.assets)?.downloadUrl
+              val relApkUrl =
+                GitHubUpdateRepository.selectCompatibleApkAsset(
+                  assets = rel.assets,
+                  isDebugBuild = BuildConfig.DEBUG,
+                )?.downloadUrl
               Row(
                 modifier =
                   Modifier.fillMaxWidth()
@@ -796,6 +935,7 @@ private fun SettingToggleRow(
   subtitle: String,
   checked: Boolean,
   onCheckedChange: (Boolean) -> Unit,
+  toggleTestTag: String? = null,
 ) {
   Row(
     modifier = Modifier.fillMaxWidth(),
@@ -814,18 +954,17 @@ private fun SettingToggleRow(
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
     }
-    Switch(checked = checked, onCheckedChange = onCheckedChange)
+    Switch(
+      checked = checked,
+      onCheckedChange = onCheckedChange,
+      modifier = if (toggleTestTag != null) Modifier.testTag(toggleTestTag) else Modifier,
+    )
   }
 }
 
-private fun selectCompatibleApkAsset(
-  assets: List<com.example.data.remote.GitHubReleaseAsset>,
-): com.example.data.remote.GitHubReleaseAsset? {
-  val apks = assets.filter { it.name.endsWith(".apk", ignoreCase = true) }
-  if (apks.isEmpty()) return null
-  return if (BuildConfig.DEBUG) {
-    apks.firstOrNull { !it.name.contains("release", ignoreCase = true) } ?: apks.first()
-  } else {
-    apks.firstOrNull { !it.name.contains("debug", ignoreCase = true) } ?: apks.first()
-  }
+private fun formatUpdateTimestamp(timestampMs: Long): String {
+  if (timestampMs <= 0L) return "Never"
+  return runCatching {
+    SimpleDateFormat("MMM d, yyyy • HH:mm", Locale.getDefault()).format(Date(timestampMs))
+  }.getOrDefault("Recently")
 }

@@ -65,6 +65,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.data.model.DramaExperienceDetector
 import com.example.data.model.Movie
 import com.example.data.model.SavedMovieEntry
 import com.example.data.model.WatchStatus
@@ -97,6 +98,7 @@ fun MovieDetailScreen(
   onBack: () -> Unit,
   onSwitchSubject: (String) -> Unit,
   onOpenPlayer: (Movie, Int, Int) -> Unit,
+  onOpenDramaPlayer: (Movie, Int, Int) -> Unit = onOpenPlayer,
   onOpenMovie: (Movie) -> Unit,
   onToggleQuickWatchlist: (Movie) -> Unit,
   onNotify: (String) -> Unit,
@@ -403,13 +405,28 @@ fun MovieDetailScreen(
         }
       }
 
-      // Dedicated Theater Player + Batch Download Action Bar
+      val isDramaTitle =
+        remember(activeMovie, seasons) {
+          DramaExperienceDetector.isEpisodicDrama(activeMovie, seasons)
+        }
+
+      // Dedicated Player + Batch Download Action Bar
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
       ) {
         Button(
-          onClick = { onOpenPlayer(activeMovie, selectedSeason, selectedEpisode) },
+          onClick = {
+            if (isDramaTitle) {
+              onOpenDramaPlayer(
+                activeMovie,
+                selectedSeason.coerceAtLeast(1),
+                selectedEpisode.coerceAtLeast(1),
+              )
+            } else {
+              onOpenPlayer(activeMovie, selectedSeason, selectedEpisode)
+            }
+          },
           shape = MaterialTheme.shapes.large,
           colors =
             ButtonDefaults.buttonColors(
@@ -425,10 +442,15 @@ fun MovieDetailScreen(
           )
           Spacer(modifier = Modifier.width(6.dp))
           val playLabel =
-            if (selectedSeason > 0 && selectedEpisode > 0)
-              "Watch S${selectedSeason}E$selectedEpisode"
-            else if (activeMovie.subjectId.isNotBlank()) "Watch in Theater"
-            else "Play Trailer"
+            when {
+              isDramaTitle && selectedSeason > 0 && selectedEpisode > 0 ->
+                "Swipe Drama S${selectedSeason}E$selectedEpisode"
+              isDramaTitle -> "Watch Vertical Drama"
+              selectedSeason > 0 && selectedEpisode > 0 ->
+                "Watch S${selectedSeason}E$selectedEpisode"
+              activeMovie.subjectId.isNotBlank() -> "Watch in Theater"
+              else -> "Play Trailer"
+            }
           Text(text = playLabel, style = MaterialTheme.typography.labelLarge)
         }
 
@@ -488,7 +510,11 @@ fun MovieDetailScreen(
           onSelectEpisode = { seasonNum, epNum ->
             selectedSeason = seasonNum
             selectedEpisode = epNum
-            onOpenPlayer(activeMovie, seasonNum, epNum)
+            if (isDramaTitle) {
+              onOpenDramaPlayer(activeMovie, seasonNum, epNum)
+            } else {
+              onOpenPlayer(activeMovie, seasonNum, epNum)
+            }
           },
           actionLabel = if (activeMovie.subjectId.isNotBlank()) "Batch DL" else null,
           onActionClick =
