@@ -3,14 +3,14 @@
   "version": "1.0.0",
   "description": "Decan Movie Windows desktop application",
   "main": "src/main.js",
-  "author": "Lenny Muriuki — Decan Konnect",
+  "author": "Lenny Muriuki \u2014 Decan Konnect",
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
     "start": "electron .",
     "dev": "electron . --enable-logging",
     "check": "node --check src/main.js && node --check src/preload.js && node --check src/renderer.js",
-    "dist:win": "electron-builder --win nsis portable --x64",
+    "dist:win": "electron-builder --win nsis portable zip --x64",
     "dist:portable": "electron-builder --win portable --x64",
     "dist:installer": "electron-builder --win nsis --x64"
   },
@@ -41,8 +41,18 @@
     },
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "build/icon.ico",
       "publisherName": "Decan Konnect",
