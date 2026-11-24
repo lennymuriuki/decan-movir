@@ -1,106 +1,124 @@
-name: Decan Movie Windows Desktop Release
+name: Release Decan Movie Windows Desktop
 
 on:
-  workflow_dispatch:
-
   push:
     tags:
-      - "v*"
+      - 'v*'
+      - 'win-v*'
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: 'Release version tag (e.g. v1.1.0)'
+        required: true
+        default: 'v1.1.0'
+      is_prerelease:
+        description: 'Mark as pre-release if creating a new release'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
 jobs:
-  build-windows:
-    name: Build Decan Movie Windows
+  release-windows:
+    name: Build & Attach Windows Installers to GitHub Release
     runs-on: windows-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
         with:
-          node-version: 22
+          fetch-depth: 0
 
-      - name: Show project structure
-        shell: powershell
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Ensure WiX Toolset is available for EXE/MSI packaging
+        shell: pwsh
         run: |
-          Write-Host "Repository:"
-          Get-ChildItem
-
-          Write-Host "Desktop:"
-          Get-ChildItem desktop
-
-      - name: Install desktop dependencies
-        working-directory: desktop
-        run: npm install
-
-      - name: Validate desktop source
-        working-directory: desktop
-        run: npm run check
-
-      - name: Build Windows installer, portable EXE and ZIP
-        working-directory: desktop
-        run: npm run dist:win
-
-      - name: Generate SHA-256 checksums
-        shell: powershell
-        run: |
-          $release = "desktop/release"
-
-          if (!(Test-Path $release)) {
-            Write-Error "Release directory was not created."
-            exit 1
+          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
+            choco install wixtoolset -y --no-progress
+            if (Test-Path "C:\Program Files (x86)\WiX Toolset v3.11\bin") {
+              Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files (x86)\WiX Toolset v3.11\bin"
+            } elseif (Test-Path "C:\Program Files (x86)\WiX Toolset v3.14\bin") {
+              Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files (x86)\WiX Toolset v3.14\bin"
+            }
           }
 
-          $files = Get-ChildItem $release -File
-
-          if ($files.Count -eq 0) {
-            Write-Error "No Windows build files were generated."
-            exit 1
-          }
-
-          $output = foreach ($file in $files) {
-            $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower()
-            "$hash  $($file.Name)"
-          }
-
-          $output | Out-File `
-            -FilePath "$release/checksums-sha256.txt" `
-            -Encoding utf8
-
-      - name: List generated Windows files
-        shell: powershell
+      - name: Resolve Version Tag
+        id: meta
+        shell: pwsh
         run: |
-          Write-Host "Generated files:"
-          Get-ChildItem desktop/release -File |
-            Select-Object Name, Length
+          $rawTag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ github.event.inputs.version_tag }}" } else { "${{ github.ref_name }}" }
+          if (-not $rawTag.StartsWith("v") -and -not $rawTag.StartsWith("win-v")) {
+            $rawTag = "v$rawTag"
+          }
+          $cleanVer = $rawTag -replace '^win-v', '' -replace '^v', ''
+          "tag=$rawTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "version_name=$cleanVer" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Upload Windows build artifacts
+      - name: Run Desktop Tests (Windows)
+        run: gradle :desktop:test --no-daemon -PtargetOs=windows -PappVersionName=${{ steps.meta.outputs.version_name }}
+
+      - name: Package Windows EXE, MSI & Portable ZIP
+        run: >
+          gradle :desktop:packageExe :desktop:packageMsi :desktop:packagePortableZip
+          --no-daemon
+          -PtargetOs=windows
+          -PappVersionName=${{ steps.meta.outputs.version_name }}
+
+      - name: Prepare Release Files & SHA-256 Checksums
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path windows-release-assets | Out-Null
+          Get-ChildItem -Path "desktop\build\compose\binaries\main\exe" -Filter "*.exe" |
+            Select-Object -First 1 |
+            ForEach-Object { Copy-Item $_.FullName "windows-release-assets\Decan-Movie-Setup.exe" -Force }
+          Get-ChildItem -Path "desktop\build\compose\binaries\main\msi" -Filter "*.msi" |
+            Select-Object -First 1 |
+            ForEach-Object { Copy-Item $_.FullName "windows-release-assets\Decan-Movie-Setup.msi" -Force }
+          Copy-Item "desktop\build\distributions\Decan-Movie-Portable.zip" "windows-release-assets\Decan-Movie-Portable.zip" -Force
+
+          $checksumLines = @()
+          Get-ChildItem -Path "windows-release-assets" -File | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash.ToLower()
+            $checksumLines += "$hash  $($_.Name)"
+          }
+          $checksumLines | Set-Content -Path "windows-release-assets\windows-checksums-sha256.txt" -Encoding ascii
+          Get-Content "windows-release-assets\windows-checksums-sha256.txt"
+
+      - name: Upload Windows Release Artifacts to Workflow Run
         uses: actions/upload-artifact@v4
         with:
-          name: Decan-Movie-Windows
-          path: |
-            desktop/release/*.exe
-            desktop/release/*.zip
-            desktop/release/*.yml
-            desktop/release/*.blockmap
-            desktop/release/checksums-sha256.txt
-          if-no-files-found: error
+          name: decan-movie-windows-${{ steps.meta.outputs.tag }}
+          path: windows-release-assets/*
+          retention-days: 30
 
-      - name: Publish Windows files to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            desktop/release/*.exe
-            desktop/release/*.zip
-            desktop/release/*.yml
-            desktop/release/*.blockmap
-            desktop/release/checksums-sha256.txt
-          generate_release_notes: true
-          fail_on_unmatched_files: true
+      - name: Attach Windows Packages to GitHub Release (Preserving Android APKs)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          IS_PRE: ${{ github.event.inputs.is_prerelease }}
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path "windows-release-assets" -File | ForEach-Object { $_.FullName }
+          gh release view "$env:TAG" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload "$env:TAG" @files --clobber
+          } else {
+            $argsList = @("release", "create", "$env:TAG", "--title", "Decan Movie $env:TAG", "--notes-file", "windows-release-assets\windows-checksums-sha256.txt")
+            if ($env:IS_PRE -eq "true") {
+              $argsList += "--prerelease"
+            }
+            $argsList += $files
+            gh @argsList
+          }
