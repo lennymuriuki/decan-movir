@@ -27,8 +27,7 @@
   - 1080p/720p/480p Stream Resolution & External `.srt` Subtitles (`/wefeed-h5api-bff/subject/play`, `/wefeed-mobile-bff/subject-api/play-info`, `/wefeed-mobile-bff/subject-api/get-stream-captions`, `/wefeed-mobile-bff/subject-api/get-ext-captions`)
 - **Settings, Account & GitHub Updater**: Switch between `Cinema Dark` and `Editorial Light`, configure default quality/speed/subtitles, manage Google Sign-In/Sign-Out, and check `api.github.com/repos/{owner}/{repo}/releases/latest` for new releases.
 
-## Windows Desktop Application
+## Desktop app (Windows / macOS / Linux)
 
-Decan Movie also includes a dedicated Windows 10/11 x64 desktop target under `desktop/`. The desktop build has its own Electron runtime, native Windows window/tray behavior, local settings/history/watchlist storage, desktop media player, drama-only vertical player, GitHub Windows update handling, NSIS installer, portable target, application icon, and GitHub Actions release workflow.
-
-See `desktop/README.md` and `README_WINDOWS.md` for build and release instructions.
+See [`desktop/README.md`](desktop/README.md). Build with `gradle :desktop:packageDistributionForCurrentOS -PdesktopOnly=true`,
+or run the **Build Decan Movie Desktop** workflow to get `.msi` / `.exe` / `.dmg` / `.deb` installers.

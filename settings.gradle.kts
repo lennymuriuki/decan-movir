@@ -24,4 +24,9 @@ dependencyResolutionManagement {
 
 rootProject.name = "Decan Movie"
 
-include(":app")
+// Android app (skipped with -PdesktopOnly=true so the desktop build needs no Android SDK).
+if (!providers.gradleProperty("desktopOnly").isPresent) {
+  include(":app")
+}
+// Windows / macOS / Linux desktop app.
+include(":desktop")
