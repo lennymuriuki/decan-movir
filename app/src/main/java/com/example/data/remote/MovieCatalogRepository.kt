@@ -48,6 +48,7 @@ class MovieCatalogRepository(
   private val movieBox: MovieBoxEngine = MovieBoxEngine(),
   private val jikanTvMaze: JikanTvMazeService = JikanTvMazeService(),
   private val snapshotPrefs: SharedPreferences? = null,
+  private val tmdbService: TmdbService = TmdbService(),
 ) {
   private val cache = ConcurrentHashMap<String, Movie>()
   @Volatile private var cachedHomeFeed: Pair<Long, CatalogFeedResult>? = null
@@ -158,6 +159,38 @@ class MovieCatalogRepository(
             .getOrDefault(emptyList())
         }.orEmpty()
       }
+      val tmdbTrendingDeferred =
+        if (tmdbService.isConfigured) {
+          async {
+            withTimeoutOrNull(5000L) {
+              runCatching { tmdbService.getTrendingAll(page = 1) }.getOrDefault(emptyList())
+            }.orEmpty()
+          }
+        } else null
+      val tmdbMoviesDeferred =
+        if (tmdbService.isConfigured) {
+          async {
+            withTimeoutOrNull(5000L) {
+              runCatching { tmdbService.getPopularMovies(page = 1) }.getOrDefault(emptyList())
+            }.orEmpty()
+          }
+        } else null
+      val tmdbTopRatedDeferred =
+        if (tmdbService.isConfigured) {
+          async {
+            withTimeoutOrNull(5000L) {
+              runCatching { tmdbService.getTopRatedMovies(page = 1) }.getOrDefault(emptyList())
+            }.orEmpty()
+          }
+        } else null
+      val tmdbTvDeferred =
+        if (tmdbService.isConfigured) {
+          async {
+            withTimeoutOrNull(5000L) {
+              runCatching { tmdbService.getPopularTv(page = 1) }.getOrDefault(emptyList())
+            }.orEmpty()
+          }
+        } else null
 
       tokenWarmDef.await()
       val mboxHome = mboxHomeDeferred.await()
@@ -169,6 +202,10 @@ class MovieCatalogRepository(
       val trendingKeywords = mboxTrendingDeferred.await()
       val topItunes = topItunesDeferred.await().filter(::isValidCinemaEntry)
       val sciFiItunes = sciFiItunesDeferred.await().filter(::isValidCinemaEntry)
+      val tmdbTrending = tmdbTrendingDeferred?.await().orEmpty().filter(::isValidCinemaEntry)
+      val tmdbMovies = tmdbMoviesDeferred?.await().orEmpty().filter(::isValidCinemaEntry)
+      val tmdbTopRated = tmdbTopRatedDeferred?.await().orEmpty().filter(::isValidCinemaEntry)
+      val tmdbTv = tmdbTvDeferred?.await().orEmpty().filter(::isValidCinemaEntry)
 
       val homeSpotlight = mboxHome?.spotlight.orEmpty().filter(::isValidCinemaEntry)
       val homeAll = mboxHome?.allMovies.orEmpty().filter(::isValidCinemaEntry)
@@ -177,6 +214,18 @@ class MovieCatalogRepository(
           val cleanMovies = rail.movies.filter(::isValidCinemaEntry)
           if (cleanMovies.isEmpty()) null else rail.copy(movies = cleanMovies)
         }
+
+      val streamPool =
+        (homeSpotlight + mboxRankings + homeAll + mboxMovies + mboxSeries + mboxAnime)
+          .filter { it.subjectId.isNotBlank() }
+      val tmdbLookupPool =
+        (tmdbTrending + tmdbMovies + tmdbTopRated + tmdbTv).associateBy { normalizeTitleKey(it.title) }
+
+      val enrichedMboxMovies = enrichStreamListWithMetadata(mboxMovies, tmdbLookupPool)
+      val enrichedMboxSeries = enrichStreamListWithMetadata(mboxSeries, tmdbLookupPool)
+      val enrichedMboxRankings = enrichStreamListWithMetadata(mboxRankings, tmdbLookupPool)
+      val enrichedTmdbTrending = linkPlayableMatches(tmdbTrending, streamPool)
+      val enrichedTmdbTopRated = linkPlayableMatches(tmdbTopRated, streamPool)
 
       val mboxAnimeByTitle = mboxAnime.associateBy { normalizeTitleKey(it.title) }
       val enrichedHomeAnime =
@@ -189,12 +238,16 @@ class MovieCatalogRepository(
 
       val combined =
         (homeSpotlight +
-            mboxRankings +
+            enrichedMboxRankings +
             homeAll +
-            mboxMovies +
-            mboxSeries +
+            enrichedMboxMovies +
+            enrichedMboxSeries +
             mboxAnime +
             enrichedHomeAnime +
+            enrichedTmdbTrending +
+            linkPlayableMatches(tmdbMovies, streamPool) +
+            enrichedTmdbTopRated +
+            linkPlayableMatches(tmdbTv, streamPool) +
             topItunes +
             sciFiItunes)
           .filter(::isValidCinemaEntry)
@@ -218,8 +271,10 @@ class MovieCatalogRepository(
       combined.forEach { cache[it.id] = it }
 
       val effectiveRankings =
-        if (mboxRankings.isNotEmpty()) {
-          mboxRankings.mapIndexed { idx, m -> m.copy(rankPosition = idx + 1) }
+        if (enrichedMboxRankings.isNotEmpty()) {
+          enrichedMboxRankings.mapIndexed { idx, m -> m.copy(rankPosition = idx + 1) }
+        } else if (enrichedTmdbTrending.isNotEmpty()) {
+          enrichedTmdbTrending.take(20).mapIndexed { idx, m -> m.copy(rankPosition = idx + 1) }
         } else {
           combined
             .sortedByDescending { it.imdbRating?.toDoubleOrNull() ?: 0.0 }
@@ -235,36 +290,57 @@ class MovieCatalogRepository(
 
       val recommendations =
         (homeRails.firstOrNull()?.movies.orEmpty() +
+            enrichedTmdbTrending.take(6) +
             effectiveRankings.take(6) +
-            mboxMovies.take(6))
+            enrichedMboxMovies.take(6))
           .filter(::isValidCinemaEntry)
           .distinctBy { it.id }
           .take(14)
 
       val spotlight =
-        (homeSpotlight + effectiveRankings.take(3) + mboxMovies.take(3))
+        (homeSpotlight + enrichedTmdbTrending.take(4) + effectiveRankings.take(3) + enrichedMboxMovies.take(3))
           .filter(::isValidCinemaEntry)
           .distinctBy { it.id }
           .take(7)
 
       val rails = buildList {
-        if (mboxMovies.isNotEmpty()) {
+        if (enrichedTmdbTrending.isNotEmpty()) {
+          add(
+            MovieRail(
+              id = "tmdb_trending",
+              title = "Trending Worldwide",
+              subtitle = "Weekly top picks ready to stream",
+              movies = enrichedTmdbTrending.take(18),
+            )
+          )
+        }
+        if (enrichedMboxMovies.isNotEmpty()) {
           add(
             MovieRail(
               id = "mbox_movies",
               title = "Trending Movies",
               subtitle = "1080p stream & multi-subtitles",
-              movies = mboxMovies,
+              movies = enrichedMboxMovies,
             )
           )
         }
-        if (mboxSeries.isNotEmpty()) {
+        if (enrichedMboxSeries.isNotEmpty()) {
           add(
             MovieRail(
               id = "mbox_series",
               title = "Popular TV Series",
               subtitle = "Seasons, episodes & batch downloads",
-              movies = mboxSeries,
+              movies = enrichedMboxSeries,
+            )
+          )
+        }
+        if (enrichedTmdbTopRated.isNotEmpty()) {
+          add(
+            MovieRail(
+              id = "tmdb_top_rated",
+              title = "Critically Acclaimed",
+              subtitle = "Highest-rated films worldwide",
+              movies = enrichedTmdbTopRated.take(18),
             )
           )
         }
@@ -417,10 +493,40 @@ class MovieCatalogRepository(
         }
       } else null
 
+    val tmdbDef =
+      if (tmdbService.isConfigured) {
+        async {
+          withTimeoutOrNull(5000L) {
+            runCatching {
+              tmdbService.discoverByCategory(
+                category = cleanCategory,
+                mediaFilterName = mediaFilterName,
+                sortMode = sortMode,
+                page = page,
+              )
+            }.getOrDefault(emptyList())
+          }.orEmpty()
+        }
+      } else null
+
+    val mboxMoviesHits = moviesDef?.await().orEmpty()
+    val mboxSeriesHits = seriesDef?.await().orEmpty()
+    val jikanHits = jikanDef?.await().orEmpty()
+    val tmdbHits = tmdbDef?.await().orEmpty()
+
+    val streamPool =
+      (mboxMoviesHits + mboxSeriesHits + cache.values.filter { it.subjectId.isNotBlank() })
+        .filter { it.subjectId.isNotBlank() }
+    val tmdbLookup = tmdbHits.associateBy { normalizeTitleKey(it.title) }
+    val enrichedMbox = enrichStreamListWithMetadata(mboxMoviesHits + mboxSeriesHits, tmdbLookup)
+    val linkedTmdb = linkPlayableMatches(tmdbHits, streamPool)
+
     val combined =
-      (moviesDef?.await().orEmpty() + seriesDef?.await().orEmpty() + jikanDef?.await().orEmpty())
+      (enrichedMbox + linkedTmdb + linkPlayableMatches(jikanHits, streamPool))
         .filter(::isValidCinemaEntry)
-        .distinctBy { it.id }
+        .groupBy { normalizeTitleKey(it.title) }
+        .values
+        .mapNotNull { mergeProviderGroup(it) }
 
     combined.forEach { cache[it.id] = it }
     sortCatalogMovies(combined, sortMode)
@@ -458,8 +564,18 @@ class MovieCatalogRepository(
         }.getOrDefault(emptyList())
       }.orEmpty()
     }
+    val tmdbAnimeDef =
+      if (tmdbService.isConfigured) {
+        async {
+          withTimeoutOrNull(5000L) {
+            runCatching { tmdbService.discoverAnime(genreLabel, sortMode, page) }
+              .getOrDefault(emptyList())
+          }.orEmpty()
+        }
+      } else null
 
     val jikanHits = jikanDef.await().filter(::isGenuineAnime)
+    val tmdbAnimeHits = tmdbAnimeDef?.await().orEmpty().filter(::isGenuineAnime)
     val mboxHits =
       mboxDef.await().filter { m ->
         isGenuineAnime(m) &&
@@ -467,13 +583,13 @@ class MovieCatalogRepository(
             m.genre.contains(genreLabel, ignoreCase = true))
       }
 
-    // Merge Jikan/AniList rankings with streamable MovieBox items matched by normalized title
+    // Merge Jikan/AniList & TMDb rankings with streamable MovieBox items matched by normalized title
     val cachedAnimeStreams =
       cache.values.filter { it.subjectId.isNotBlank() && isGenuineAnime(it) }
     val mboxByTitle =
       (cachedAnimeStreams + mboxHits).associateBy { normalizeTitleKey(it.title) }
     val enrichedJikan =
-      jikanHits.map { anime ->
+      (jikanHits + tmdbAnimeHits).map { anime ->
         val streamMatch = mboxByTitle[normalizeTitleKey(anime.title)]
         if (streamMatch != null) {
           anime.copy(
@@ -613,6 +729,14 @@ class MovieCatalogRepository(
       val jikanDeferred = async {
         runCatching { jikanTvMaze.searchAnime(cleanQuery, limit = 15) }.getOrDefault(emptyList())
       }
+      val tmdbDeferred =
+        if (tmdbService.isConfigured) {
+          async {
+            withTimeoutOrNull(4500L) {
+              runCatching { tmdbService.searchMulti(cleanQuery, page = 1) }.getOrDefault(emptyList())
+            }.orEmpty()
+          }
+        } else null
 
       val directMovie = directIdDeferred?.await()
       val mboxHits = mboxDeferred.await()
@@ -620,22 +744,24 @@ class MovieCatalogRepository(
       val itunesHits = itunesDeferred.await()
       val tvHits = tvMazeDeferred.await()
       val animeHits = jikanDeferred.await()
+      val tmdbHits = tmdbDeferred?.await().orEmpty()
 
       val rawCombined =
-        (listOfNotNull(directMovie) + mboxHits + suggestMovies + tvHits + animeHits + itunesHits)
+        (listOfNotNull(directMovie) +
+            mboxHits +
+            suggestMovies +
+            tmdbHits +
+            tvHits +
+            animeHits +
+            itunesHits)
           .filter(::isValidCinemaEntry)
-      // Prefer entries that already have stream subjectId or better metadata, keep distinct by normalized title+type
+      // Prefer entries that already have stream subjectId while merging richer TMDb metadata/artwork
       val deduped =
         rawCombined
           .distinctBy { it.id }
           .groupBy { normalizeTitleKey(it.title) }
           .values
-          .mapNotNull { group ->
-            group.firstOrNull { it.subjectId.isNotBlank() && it.posterUrl.isNotBlank() }
-              ?: group.firstOrNull { it.subjectId.isNotBlank() }
-              ?: group.firstOrNull { it.posterUrl.isNotBlank() }
-              ?: group.firstOrNull()
-          }
+          .mapNotNull { group -> mergeProviderGroup(group) }
 
       deduped.forEach { cache[it.id] = it }
 
@@ -673,6 +799,27 @@ class MovieCatalogRepository(
       val rich = getMovieBoxRichDetail(subjectId)
       if (rich != null) {
         return rich.movie
+      }
+      return cached
+    }
+
+    if (movieId.startsWith("tmdb_movie_") || movieId.startsWith("tmdb_tv_")) {
+      val mediaKind = if (movieId.startsWith("tmdb_tv_")) "tv" else "movie"
+      val tmdbId =
+        movieId.removePrefix("tmdb_tv_").removePrefix("tmdb_movie_").toLongOrNull()
+          ?: cached?.trackId
+      if (tmdbId != null && tmdbId > 0L && tmdbService.isConfigured) {
+        val rich = runCatching { tmdbService.getDetail(mediaKind, tmdbId) }.getOrNull()
+        if (rich != null) {
+          val merged =
+            rich.movie.copy(
+              subjectId = cached?.subjectId ?: rich.movie.subjectId,
+              detailPath = cached?.detailPath ?: rich.movie.detailPath,
+            )
+          cache[merged.id] = merged
+          rich.recommendations.forEach { cache.putIfAbsent(it.id, it) }
+          return merged
+        }
       }
       return cached
     }
@@ -823,8 +970,64 @@ class MovieCatalogRepository(
     return tokens.all { haystack.contains(it, ignoreCase = true) }
   }
 
-  private fun normalizeTitleKey(raw: String): String =
+  internal fun normalizeTitleKey(raw: String): String =
     raw.lowercase().replace(Regex("[^a-z0-9]"), "")
+
+  internal fun mergeProviderGroup(group: List<Movie>): Movie? {
+    if (group.isEmpty()) return null
+    val primary =
+      group.firstOrNull { it.subjectId.isNotBlank() && it.posterUrl.isNotBlank() }
+        ?: group.firstOrNull { it.subjectId.isNotBlank() }
+        ?: group.firstOrNull { (it.id.startsWith("tmdb_") || it.sourceProvider == "Decan Cinema") && it.posterUrl.isNotBlank() }
+        ?: group.firstOrNull { it.posterUrl.isNotBlank() }
+        ?: group.first()
+    val metadataRich =
+      group.firstOrNull { (it.id.startsWith("tmdb_") || it.sourceProvider == "Decan Cinema") && it.posterUrl.isNotBlank() }
+        ?: group.firstOrNull { it !== primary && it.posterUrl.isNotBlank() }
+        ?: return primary
+    return primary.copy(
+      posterUrl = primary.posterUrl.ifBlank { metadataRich.posterUrl },
+      backdropUrl = primary.backdropUrl.ifBlank { metadataRich.backdropUrl },
+      synopsis =
+        if (primary.synopsis.length < 25 && metadataRich.synopsis.length > primary.synopsis.length) {
+          metadataRich.synopsis
+        } else {
+          primary.synopsis
+        },
+      imdbRating = primary.imdbRating ?: metadataRich.imdbRating,
+      genre =
+        if (primary.genre.isBlank() || primary.genre.equals("Cinema", true)) metadataRich.genre
+        else primary.genre,
+      releaseYear = primary.releaseYear.ifBlank { metadataRich.releaseYear },
+    )
+  }
+
+  private fun enrichStreamListWithMetadata(
+    streamItems: List<Movie>,
+    tmdbByTitle: Map<String, Movie>,
+  ): List<Movie> {
+    if (tmdbByTitle.isEmpty()) return streamItems
+    return streamItems.map { item ->
+      val tmdb = tmdbByTitle[normalizeTitleKey(item.title)] ?: return@map item
+      mergeProviderGroup(listOf(item, tmdb)) ?: item
+    }
+  }
+
+  private fun linkPlayableMatches(
+    items: List<Movie>,
+    streamPool: List<Movie>,
+  ): List<Movie> {
+    if (streamPool.isEmpty()) return items
+    val streamByTitle = streamPool.associateBy { normalizeTitleKey(it.title) }
+    return items.map { item ->
+      if (item.subjectId.isNotBlank()) return@map item
+      val match = streamByTitle[normalizeTitleKey(item.title)] ?: return@map item
+      item.copy(
+        subjectId = match.subjectId,
+        detailPath = match.detailPath ?: item.detailPath,
+      )
+    }
+  }
 
   internal fun rankSearchResults(query: String, movies: List<Movie>): List<Movie> {
     val q = query.trim().lowercase()

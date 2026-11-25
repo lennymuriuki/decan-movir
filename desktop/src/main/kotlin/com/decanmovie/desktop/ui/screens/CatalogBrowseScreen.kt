@@ -84,7 +84,7 @@ fun CatalogBrowseScreen(
     when (kind) {
       CatalogBrowseKind.MOVIES -> "Feature films streamed in Desktop Theater Mode"
       CatalogBrowseKind.SERIES -> "Multi-season series with quick episode switching"
-      CatalogBrowseKind.ANIME -> "Verified anime series and movies powered by AniList & Jikan"
+      CatalogBrowseKind.ANIME -> "Curated anime series and movies ready to stream"
       CatalogBrowseKind.DRAMAS -> "K-Dramas, C-Dramas & short dramas — launches in TikTok-style Vertical Drama Mode"
     }
 
