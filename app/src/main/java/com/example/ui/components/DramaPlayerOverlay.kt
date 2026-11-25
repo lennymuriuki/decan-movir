@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -104,6 +105,7 @@ data class DramaPlayerUiState(
   val qualityLabel: String?,
   val playbackSpeed: Float,
   val fillScreen: Boolean,
+  val canEnterPip: Boolean = true,
 )
 
 @Composable
@@ -121,6 +123,7 @@ fun DramaPlayerOverlay(
   onNextEpisode: () -> Unit,
   onRetryStream: () -> Unit,
   onUnlock: () -> Unit,
+  onEnterPip: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   var descriptionExpanded by remember(state.episode.globalIndex) { mutableStateOf(false) }
@@ -326,16 +329,30 @@ fun DramaPlayerOverlay(
             }
           }
 
-          IconButton(
-            onClick = onOpenMoreOptions,
-            modifier =
-              Modifier.minimumInteractiveComponentSize().testTag("drama_top_more_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Filled.MoreVert,
-              contentDescription = "More options",
-              tint = Color.White,
-            )
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            if (state.canEnterPip) {
+              IconButton(
+                onClick = onEnterPip,
+                modifier = Modifier.minimumInteractiveComponentSize().testTag("drama_pip_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.Filled.PictureInPictureAlt,
+                  contentDescription = "Picture-in-Picture",
+                  tint = Color.White,
+                )
+              }
+            }
+            IconButton(
+              onClick = onOpenMoreOptions,
+              modifier =
+                Modifier.minimumInteractiveComponentSize().testTag("drama_top_more_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Filled.MoreVert,
+                contentDescription = "More options",
+                tint = Color.White,
+              )
+            }
           }
         }
 

@@ -99,6 +99,7 @@ class GitHubUpdateRepository(
             .addHeader("User-Agent", "DecanMovie-Android")
             .build()
 
+        var apiNetworkError: Throwable? = null
         val apiResult =
           runCatching {
             client.newCall(latestReq).execute().use { resp ->
@@ -108,14 +109,26 @@ class GitHubUpdateRepository(
                 else -> null
               }
             }
-          }.getOrNull()
+          }.getOrElse { err ->
+            apiNetworkError = err
+            null
+          }
 
         if (apiResult != null) {
           return@runCatching enrichReleaseChecksums(apiResult)
         }
 
         // Fallback to Atom feed (not subject to GitHub REST API 60 req/hr unauthenticated limit)
-        fetchReleasesAtom(cleanSlug, currentVersion).firstOrNull()?.let { enrichReleaseChecksums(it) }
+        val atomResult = fetchReleasesAtomResult(cleanSlug, currentVersion)
+        val firstAtom = atomResult.getOrNull()?.firstOrNull()
+        if (firstAtom != null) {
+          return@runCatching enrichReleaseChecksums(firstAtom)
+        }
+        val atomErr = atomResult.exceptionOrNull()
+        if (apiNetworkError != null && atomErr != null) {
+          throw atomErr
+        }
+        null
       }
     }
 
@@ -276,10 +289,10 @@ class GitHubUpdateRepository(
     }
   }
 
-  private fun fetchReleasesAtom(
+  private fun fetchReleasesAtomResult(
     cleanSlug: String,
     currentVersion: String,
-  ): List<GitHubReleaseInfo> {
+  ): Result<List<GitHubReleaseInfo>> {
     val req =
       Request.Builder()
         .url("https://github.com/$cleanSlug/releases.atom")
@@ -287,12 +300,20 @@ class GitHubUpdateRepository(
         .build()
     return runCatching {
       client.newCall(req).execute().use { resp ->
-        if (!resp.isSuccessful) return@use emptyList()
+        if (!resp.isSuccessful) {
+          if (resp.code == 404) return@use emptyList()
+          throw IllegalStateException("GitHub releases feed returned HTTP ${resp.code}")
+        }
         val xml = resp.body?.string().orEmpty()
         parseAtomXml(xml, cleanSlug, currentVersion)
       }
-    }.getOrDefault(emptyList())
+    }
   }
+
+  private fun fetchReleasesAtom(
+    cleanSlug: String,
+    currentVersion: String,
+  ): List<GitHubReleaseInfo> = fetchReleasesAtomResult(cleanSlug, currentVersion).getOrDefault(emptyList())
 
   internal fun parseAtomXml(
     xml: String,
@@ -349,11 +370,17 @@ class GitHubUpdateRepository(
               val cleanText =
                 content.replace(Regex("<[^>]*>"), " ").replace(Regex("\\s+"), " ").trim()
               val debugApkName = "decan-movie-$tagName-debug.apk"
+              val signedReleaseApkName = "decan-movie-$tagName-release.apk"
               val releaseApkName = "decan-movie-$tagName.apk"
               val checksumMap =
-                parseChecksumsFromText(cleanText, listOf(debugApkName, releaseApkName))
+                parseChecksumsFromText(
+                  cleanText,
+                  listOf(debugApkName, signedReleaseApkName, releaseApkName),
+                )
               val debugApkUrl =
                 "https://github.com/$cleanSlug/releases/download/$tagName/$debugApkName"
+              val signedReleaseApkUrl =
+                "https://github.com/$cleanSlug/releases/download/$tagName/$signedReleaseApkName"
               val releaseApkUrl =
                 "https://github.com/$cleanSlug/releases/download/$tagName/$releaseApkName"
               list.add(
@@ -375,6 +402,13 @@ class GitHubUpdateRepository(
                         sizeMb = 0.0,
                         contentType = GitHubReleaseAsset.APK_MIME_TYPE,
                         sha256 = checksumMap[debugApkName] ?: checksumMap["*"],
+                      ),
+                      GitHubReleaseAsset(
+                        name = signedReleaseApkName,
+                        downloadUrl = signedReleaseApkUrl,
+                        sizeMb = 0.0,
+                        contentType = GitHubReleaseAsset.APK_MIME_TYPE,
+                        sha256 = checksumMap[signedReleaseApkName] ?: checksumMap["*"],
                       ),
                       GitHubReleaseAsset(
                         name = releaseApkName,

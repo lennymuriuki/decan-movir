@@ -499,6 +499,12 @@ fun BatchDownloadSheet(
                     isSeries = true,
                     allowMetered = allowMetered,
                     storageLocation = chosenStorage,
+                    movieId = movie.id,
+                    posterUrl = movie.posterUrl,
+                    backdropUrl = movie.backdropUrl,
+                    mediaType = movie.mediaType,
+                    genre = movie.genre,
+                    releaseYear = movie.releaseYear,
                   ).onSuccess { queuedCount++ }.onFailure { failedCount++ }
                 } else {
                   failedCount++
@@ -516,6 +522,12 @@ fun BatchDownloadSheet(
                     isSeries = true,
                     allowMetered = allowMetered,
                     storageLocation = chosenStorage,
+                    movieId = movie.id,
+                    posterUrl = movie.posterUrl,
+                    backdropUrl = movie.backdropUrl,
+                    mediaType = movie.mediaType,
+                    genre = movie.genre,
+                    releaseYear = movie.releaseYear,
                   ).onSuccess { queuedCount++ }
                 }
                 progressDone++
@@ -548,6 +560,12 @@ fun BatchDownloadSheet(
                 isSeries = isSeriesFolder,
                 allowMetered = allowMetered,
                 storageLocation = chosenStorage,
+                movieId = movie.id,
+                posterUrl = movie.posterUrl,
+                backdropUrl = movie.backdropUrl,
+                mediaType = movie.mediaType,
+                genre = movie.genre,
+                releaseYear = movie.releaseYear,
               )
             if (result.queuedFiles > 0) {
               DecanNotificationManager.notifyBatchQueued(

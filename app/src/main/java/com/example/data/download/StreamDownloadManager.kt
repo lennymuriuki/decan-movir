@@ -4,10 +4,13 @@ import android.app.DownloadManager
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.LruCache
 import androidx.compose.runtime.Immutable
 import com.example.data.remote.moviebox.MovieBoxStream
 import com.example.data.remote.moviebox.MovieBoxSubtitle
@@ -37,6 +40,13 @@ data class DownloadTaskInfo(
   val seasonNumber: Int = 0,
   val episodeNumber: Int = 0,
   val relativePath: String = "",
+  val movieId: String = "",
+  val posterUrl: String = "",
+  val backdropUrl: String = "",
+  val mediaType: String = if (isSeriesFolder) "Series" else "Movie",
+  val genre: String = "",
+  val releaseYear: String = "",
+  val qualityLabel: String = "",
 ) {
   val isCompleted: Boolean
     get() = status == DownloadManager.STATUS_SUCCESSFUL
@@ -74,6 +84,12 @@ data class DownloadTaskInfo(
       if (seasonNumber > 0 && episodeNumber > 0) {
         "S${seasonNumber.toString().padStart(2, '0')}E${episodeNumber.toString().padStart(2, '0')}"
       } else null
+
+  val displayArtworkUrl: String
+    get() = posterUrl.ifBlank { backdropUrl }
+
+  val cleanDisplayTitle: String
+    get() = title.substringBefore(" • S").substringBefore(" (").trim().ifBlank { folderName.replace("_", " ") }
 }
 
 @Immutable
@@ -86,7 +102,16 @@ data class DownloadFolderSummary(
   val subtitleCount: Int,
   val activeCount: Int,
   val totalBytes: Long,
-)
+  val movieId: String = "",
+  val posterUrl: String = "",
+  val backdropUrl: String = "",
+  val mediaType: String = if (isSeriesFolder) "Series" else "Movie",
+  val genre: String = "",
+  val releaseYear: String = "",
+) {
+  val displayArtworkUrl: String
+    get() = posterUrl.ifBlank { backdropUrl }
+}
 
 data class BatchEnqueueSummary(
   val queuedFiles: Int,
@@ -96,6 +121,8 @@ data class BatchEnqueueSummary(
 object StreamDownloadManager {
   private const val META_PREFS = "decan_download_folder_meta"
   private val EPISODE_TAG_REGEX = Regex("S(\\d{1,2})E(\\d{1,3})", RegexOption.IGNORE_CASE)
+  private val QUALITY_REGEX = Regex("\\((\\d{3,4}[pP]|4K|HD|SD)\\)")
+  private val frameThumbnailCache = LruCache<String, Bitmap>(24)
 
   internal fun buildRelativeMediaPath(
     movieTitle: String,
@@ -127,6 +154,12 @@ object StreamDownloadManager {
     isSeries: Boolean = (season > 0 && episode > 0),
     allowMetered: Boolean = true,
     storageLocation: DownloadStorageLocation = DownloadStorageLocation.PUBLIC_DOWNLOADS,
+    movieId: String = "",
+    posterUrl: String = "",
+    backdropUrl: String = "",
+    mediaType: String = if (isSeries) "Series" else "Movie",
+    genre: String = "",
+    releaseYear: String = "",
   ): Result<Long> =
     runCatching {
       val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
@@ -170,6 +203,13 @@ object StreamDownloadManager {
         seasonNumber = season,
         episodeNumber = episode,
         relativePath = relPath,
+        movieId = movieId,
+        posterUrl = posterUrl,
+        backdropUrl = backdropUrl,
+        mediaType = mediaType,
+        genre = genre,
+        releaseYear = releaseYear,
+        qualityLabel = stream.quality,
       )
       id
     }
@@ -183,6 +223,12 @@ object StreamDownloadManager {
     isSeries: Boolean = (season > 0 && episode > 0),
     allowMetered: Boolean = true,
     storageLocation: DownloadStorageLocation = DownloadStorageLocation.PUBLIC_DOWNLOADS,
+    movieId: String = "",
+    posterUrl: String = "",
+    backdropUrl: String = "",
+    mediaType: String = if (isSeries) "Series" else "Movie",
+    genre: String = "",
+    releaseYear: String = "",
   ): Result<Long> =
     runCatching {
       val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
@@ -219,6 +265,13 @@ object StreamDownloadManager {
         seasonNumber = season,
         episodeNumber = episode,
         relativePath = relPath,
+        movieId = movieId,
+        posterUrl = posterUrl,
+        backdropUrl = backdropUrl,
+        mediaType = mediaType,
+        genre = genre,
+        releaseYear = releaseYear,
+        qualityLabel = "CC",
       )
       id
     }
@@ -249,6 +302,12 @@ object StreamDownloadManager {
     isSeries: Boolean = (season > 0 && episode > 0),
     allowMetered: Boolean = true,
     storageLocation: DownloadStorageLocation = DownloadStorageLocation.PUBLIC_DOWNLOADS,
+    movieId: String = "",
+    posterUrl: String = "",
+    backdropUrl: String = "",
+    mediaType: String = if (isSeries) "Series" else "Movie",
+    genre: String = "",
+    releaseYear: String = "",
   ): BatchEnqueueSummary {
     var queued = 0
     var failed = 0
@@ -263,6 +322,12 @@ object StreamDownloadManager {
           isSeries = isSeries,
           allowMetered = allowMetered,
           storageLocation = storageLocation,
+          movieId = movieId,
+          posterUrl = posterUrl,
+          backdropUrl = backdropUrl,
+          mediaType = mediaType,
+          genre = genre,
+          releaseYear = releaseYear,
         )
           .onSuccess { queued++ }
           .onFailure { failed++ }
@@ -278,6 +343,12 @@ object StreamDownloadManager {
         isSeries = isSeries,
         allowMetered = allowMetered,
         storageLocation = storageLocation,
+        movieId = movieId,
+        posterUrl = posterUrl,
+        backdropUrl = backdropUrl,
+        mediaType = mediaType,
+        genre = genre,
+        releaseYear = releaseYear,
       )
         .onSuccess { queued++ }
         .onFailure { failed++ }
@@ -322,6 +393,9 @@ object StreamDownloadManager {
               .thenBy { if (it.isVideo) 0 else 1 }
               .thenByDescending { it.id }
           )
+        val metaSource =
+          sorted.firstOrNull { it.posterUrl.isNotBlank() || it.movieId.isNotBlank() }
+            ?: sorted.firstOrNull()
         add(
           DownloadFolderSummary(
             key = "series_$seriesName",
@@ -332,25 +406,67 @@ object StreamDownloadManager {
             subtitleCount = sorted.count { it.isSubtitle },
             activeCount = sorted.count { it.isActive },
             totalBytes = sorted.sumOf { it.bytesDownloaded },
+            movieId = metaSource?.movieId.orEmpty(),
+            posterUrl = sorted.firstNotNullOfOrNull { it.posterUrl.takeIf(String::isNotBlank) }.orEmpty(),
+            backdropUrl = sorted.firstNotNullOfOrNull { it.backdropUrl.takeIf(String::isNotBlank) }.orEmpty(),
+            mediaType = metaSource?.mediaType?.ifBlank { "Series" } ?: "Series",
+            genre = sorted.firstNotNullOfOrNull { it.genre.takeIf(String::isNotBlank) }.orEmpty(),
+            releaseYear = sorted.firstNotNullOfOrNull { it.releaseYear.takeIf(String::isNotBlank) }.orEmpty(),
           )
         )
       }
       if (moviesFolderItems.isNotEmpty()) {
+        val sortedMovies = moviesFolderItems.sortedByDescending { it.id }
+        val metaSource =
+          sortedMovies.firstOrNull { it.posterUrl.isNotBlank() || it.movieId.isNotBlank() }
+            ?: sortedMovies.firstOrNull()
         add(
           DownloadFolderSummary(
             key = "movies_root",
             folderName = "Movies",
             isSeriesFolder = false,
-            items = moviesFolderItems.sortedByDescending { it.id },
-            videoCount = moviesFolderItems.count { it.isVideo },
-            subtitleCount = moviesFolderItems.count { it.isSubtitle },
-            activeCount = moviesFolderItems.count { it.isActive },
-            totalBytes = moviesFolderItems.sumOf { it.bytesDownloaded },
+            items = sortedMovies,
+            videoCount = sortedMovies.count { it.isVideo },
+            subtitleCount = sortedMovies.count { it.isSubtitle },
+            activeCount = sortedMovies.count { it.isActive },
+            totalBytes = sortedMovies.sumOf { it.bytesDownloaded },
+            movieId = metaSource?.movieId.orEmpty(),
+            posterUrl = sortedMovies.firstNotNullOfOrNull { it.posterUrl.takeIf(String::isNotBlank) }.orEmpty(),
+            backdropUrl = sortedMovies.firstNotNullOfOrNull { it.backdropUrl.takeIf(String::isNotBlank) }.orEmpty(),
+            mediaType = "Movie",
+            genre = sortedMovies.firstNotNullOfOrNull { it.genre.takeIf(String::isNotBlank) }.orEmpty(),
+            releaseYear = sortedMovies.firstNotNullOfOrNull { it.releaseYear.takeIf(String::isNotBlank) }.orEmpty(),
           )
         )
       }
     }.sortedWith(compareByDescending<DownloadFolderSummary> { it.isSeriesFolder }.thenBy { it.folderName })
   }
+
+  suspend fun loadVideoFrameThumbnail(context: Context, localUri: String): Bitmap? =
+    withContext(Dispatchers.IO) {
+      if (localUri.isBlank()) return@withContext null
+      frameThumbnailCache.get(localUri)?.let { return@withContext it }
+      runCatching {
+        val retriever = MediaMetadataRetriever()
+        try {
+          val parsed = Uri.parse(localUri)
+          if (parsed.scheme == "file" && !parsed.path.isNullOrBlank()) {
+            retriever.setDataSource(parsed.path)
+          } else {
+            retriever.setDataSource(context.applicationContext, parsed)
+          }
+          val frame =
+            retriever.getFrameAtTime(2_000_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+              ?: retriever.frameAtTime
+          if (frame != null) {
+            frameThumbnailCache.put(localUri, frame)
+          }
+          frame
+        } finally {
+          runCatching { retriever.release() }
+        }
+      }.getOrNull()
+    }
 
   /**
    * Finds matching downloaded .srt subtitle files for an offline video URI and parses cues.
@@ -573,6 +689,8 @@ object StreamDownloadManager {
     val epMatch = EPISODE_TAG_REGEX.find(title) ?: EPISODE_TAG_REGEX.find(parsedRelPath)
     val seasonNum = meta?.seasonNumber?.takeIf { it > 0 } ?: epMatch?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
     val episodeNum = meta?.episodeNumber?.takeIf { it > 0 } ?: epMatch?.groupValues?.getOrNull(2)?.toIntOrNull() ?: 0
+    val qualityMatch = QUALITY_REGEX.find(title)?.groupValues?.getOrNull(1)
+    val qualityLabel = meta?.qualityLabel?.ifBlank { qualityMatch.orEmpty() } ?: qualityMatch.orEmpty()
 
     val progress =
       when {
@@ -625,16 +743,55 @@ object StreamDownloadManager {
       seasonNumber = seasonNum,
       episodeNumber = episodeNum,
       relativePath = parsedRelPath,
+      movieId = meta?.movieId.orEmpty(),
+      posterUrl = meta?.posterUrl.orEmpty(),
+      backdropUrl = meta?.backdropUrl.orEmpty(),
+      mediaType = meta?.mediaType?.ifBlank { if (isSeries) "Series" else "Movie" }
+        ?: if (isSeries) "Series" else "Movie",
+      genre = meta?.genre.orEmpty(),
+      releaseYear = meta?.releaseYear.orEmpty(),
+      qualityLabel = qualityLabel,
     )
   }
 
   fun removeDownload(context: Context, vararg ids: Long): Int {
+    if (ids.isEmpty()) return 0
+    val dm = runCatching { context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager }.getOrNull()
+    val localFilePaths = mutableListOf<String>()
+    if (dm != null) {
+      ids.forEach { id ->
+        runCatching {
+          dm.query(DownloadManager.Query().setFilterById(id))?.use { c ->
+            if (c.moveToFirst()) {
+              val idxUri = c.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)
+              val uriStr = if (idxUri >= 0) c.getString(idxUri) else null
+              if (!uriStr.isNullOrBlank()) {
+                val parsed = Uri.parse(uriStr)
+                if (parsed.scheme == "file" && !parsed.path.isNullOrBlank()) {
+                  localFilePaths.add(parsed.path!!)
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
     val prefs = context.applicationContext.getSharedPreferences(META_PREFS, Context.MODE_PRIVATE)
     prefs.edit().apply { ids.forEach { remove("dl_$it") } }.apply()
-    return runCatching {
-      val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-      dm.remove(*ids)
-    }.getOrDefault(0)
+
+    val removedCount =
+      runCatching {
+        dm?.remove(*ids) ?: 0
+      }.getOrDefault(0)
+
+    localFilePaths.forEach { path ->
+      runCatching {
+        val f = File(path)
+        if (f.exists()) f.delete()
+      }
+    }
+    return if (removedCount > 0) removedCount else ids.size
   }
 
   private data class StoredFolderMeta(
@@ -643,6 +800,13 @@ object StreamDownloadManager {
     val seasonNumber: Int,
     val episodeNumber: Int,
     val relativePath: String,
+    val movieId: String,
+    val posterUrl: String,
+    val backdropUrl: String,
+    val mediaType: String,
+    val genre: String,
+    val releaseYear: String,
+    val qualityLabel: String,
   )
 
   private fun saveFolderMeta(
@@ -653,6 +817,13 @@ object StreamDownloadManager {
     seasonNumber: Int,
     episodeNumber: Int,
     relativePath: String,
+    movieId: String,
+    posterUrl: String,
+    backdropUrl: String,
+    mediaType: String,
+    genre: String,
+    releaseYear: String,
+    qualityLabel: String,
   ) {
     val obj =
       JSONObject().apply {
@@ -661,6 +832,13 @@ object StreamDownloadManager {
         put("seasonNumber", seasonNumber)
         put("episodeNumber", episodeNumber)
         put("relativePath", relativePath)
+        if (movieId.isNotBlank()) put("movieId", movieId)
+        if (posterUrl.isNotBlank()) put("posterUrl", posterUrl)
+        if (backdropUrl.isNotBlank()) put("backdropUrl", backdropUrl)
+        if (mediaType.isNotBlank()) put("mediaType", mediaType)
+        if (genre.isNotBlank()) put("genre", genre)
+        if (releaseYear.isNotBlank()) put("releaseYear", releaseYear)
+        if (qualityLabel.isNotBlank()) put("qualityLabel", qualityLabel)
       }
     context.applicationContext
       .getSharedPreferences(META_PREFS, Context.MODE_PRIVATE)
@@ -683,6 +861,13 @@ object StreamDownloadManager {
         seasonNumber = o.optInt("seasonNumber", 0),
         episodeNumber = o.optInt("episodeNumber", 0),
         relativePath = o.optString("relativePath"),
+        movieId = o.optString("movieId"),
+        posterUrl = o.optString("posterUrl"),
+        backdropUrl = o.optString("backdropUrl"),
+        mediaType = o.optString("mediaType"),
+        genre = o.optString("genre"),
+        releaseYear = o.optString("releaseYear"),
+        qualityLabel = o.optString("qualityLabel"),
       )
     }.getOrNull()
   }

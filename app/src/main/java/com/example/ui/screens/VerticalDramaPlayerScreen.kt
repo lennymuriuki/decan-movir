@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.graphics.Rect
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -21,8 +22,12 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -33,16 +38,23 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toAndroidRectF
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.graphics.toRect
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -71,6 +83,9 @@ import com.example.ui.components.DramaPlayerUiState
 import com.example.ui.components.MoviePosterImage
 import com.example.ui.components.PlayerSettingsSheet
 import com.example.ui.components.PlayerSubtitlesSheet
+import com.example.ui.pip.PipSupport
+import com.example.ui.pip.PlayerPipController
+import com.example.ui.pip.rememberIsInPictureInPictureMode
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.async
@@ -162,6 +177,11 @@ fun VerticalDramaPlayerScreen(
     mutableFloatStateOf((cur.toFloat() / maxSystemVol.toFloat()).coerceIn(0f, 1f))
   }
   var isMuted by remember { mutableStateOf(volume <= 0.01f) }
+
+  val isInPipMode = rememberIsInPictureInPictureMode()
+  val latestIsInPip by rememberUpdatedState(isInPipMode)
+  val pipSupported = remember(context) { PipSupport.isPipSupported(context) }
+  var videoSurfaceRect by remember { mutableStateOf<Rect?>(null) }
 
   var showMoreSheet by remember { mutableStateOf(false) }
   var showSettingsSheet by remember { mutableStateOf(false) }
@@ -291,10 +311,14 @@ fun VerticalDramaPlayerScreen(
     }
   }
 
-  // Pause safely when app goes to background
+  // Pause safely when app goes to background (do NOT pause when entering PiP)
   DisposableEffect(lifecycleOwner) {
     val observer = LifecycleEventObserver { _, event ->
-      if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
+      val inPipNow =
+        latestIsInPip ||
+          (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            activity?.isInPictureInPictureMode == true)
+      if (event == Lifecycle.Event.ON_STOP || (event == Lifecycle.Event.ON_PAUSE && !inPipNow)) {
         persistCurrentEpisodeProgress(episodes.getOrNull(pagerState.currentPage))
         runCatching {
           if (mediaPlayer?.isPlaying == true) {
@@ -605,15 +629,48 @@ fun VerticalDramaPlayerScreen(
   val dramaTitle = movie?.title?.ifBlank { "Decan Drama" } ?: "Decan Drama"
   val posterArt = movie?.backdropUrl?.ifBlank { movie?.posterUrl }.orEmpty()
 
+  PlayerPipController(
+    shouldAutoEnterPip = isPlaying && playbackUrl != null && playerError == null && !isLoadingStreams,
+    isPlaying = isPlaying,
+    videoWidth = videoWidth,
+    videoHeight = videoHeight,
+    sourceRect = videoSurfaceRect,
+    includeSeekActions = false,
+    onPlay = {
+      mediaPlayer?.let { mp ->
+        runCatching {
+          if (!mp.isPlaying && requestPlaybackAudioFocus()) {
+            mp.start()
+            isPlaying = true
+          }
+        }
+      }
+    },
+    onPause = {
+      mediaPlayer?.let { mp ->
+        runCatching {
+          if (mp.isPlaying) {
+            mp.pause()
+            isPlaying = false
+            persistCurrentEpisodeProgress(episodes.getOrNull(pagerState.currentPage))
+          }
+        }
+      }
+    },
+  )
+
   Box(
     modifier =
       Modifier.fillMaxSize()
         .background(Color.Black)
+        .onGloballyPositioned { coords ->
+          videoSurfaceRect = coords.boundsInWindow().toAndroidRectF().toRect()
+        }
         .testTag("vertical_drama_player_root")
   ) {
     VerticalPager(
       state = pagerState,
-      userScrollEnabled = !isLocked,
+      userScrollEnabled = !isLocked && !isInPipMode,
       beyondViewportPageCount = 1,
       key = { idx ->
         val ep = episodes.getOrNull(idx)
@@ -692,7 +749,24 @@ fun VerticalDramaPlayerScreen(
           )
         }
 
-        if (isCurrentPage) {
+        if (isCurrentPage && isInPipMode) {
+          val cueText = activeCue?.text
+          if (!cueText.isNullOrBlank()) {
+            Surface(
+              color = Color.Black.copy(alpha = 0.72f),
+              shape = MaterialTheme.shapes.extraSmall,
+              modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 8.dp, vertical = 6.dp),
+            ) {
+              Text(
+                text = cueText,
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+              )
+            }
+          }
+        } else if (isCurrentPage) {
           val overlayUiState =
             DramaPlayerUiState(
               dramaTitle = dramaTitle,
@@ -713,6 +787,7 @@ fun VerticalDramaPlayerScreen(
               qualityLabel = activeStream?.quality,
               playbackSpeed = playbackSpeed,
               fillScreen = fillScreen,
+              canEnterPip = pipSupported,
             )
 
           DramaPlayerOverlay(
@@ -785,6 +860,17 @@ fun VerticalDramaPlayerScreen(
               isLocked = false
               controlsVisible = true
               interactionBump++
+            },
+            onEnterPip = {
+              PipSupport.enterPictureInPicture(
+                context = context,
+                isPlaying = isPlaying,
+                videoWidth = videoWidth,
+                videoHeight = videoHeight,
+                sourceRect = videoSurfaceRect,
+                autoEnterEnabled = isPlaying,
+                includeSeekActions = false,
+              )
             },
           )
         }
@@ -900,6 +986,12 @@ fun VerticalDramaPlayerScreen(
           isSeries = true,
           allowMetered = appSettings.allowMeteredDownloads,
           storageLocation = appSettings.storageLocation,
+          movieId = movie?.id.orEmpty(),
+          posterUrl = movie?.posterUrl.orEmpty(),
+          backdropUrl = movie?.backdropUrl.orEmpty(),
+          mediaType = movie?.mediaType ?: "Drama",
+          genre = movie?.genre.orEmpty(),
+          releaseYear = movie?.releaseYear.orEmpty(),
         )
           .onSuccess { onNotify("Downloading ${sub.language} (.srt)") }
           .onFailure { err -> onNotify(err.message ?: "Subtitle download unavailable") }

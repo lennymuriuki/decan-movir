@@ -695,28 +695,41 @@ private fun DecanMainShell(
                   }
                 },
                 onResumeWatching = { cw ->
-                  val cachedMovie = catalogRepository.getCachedMovie(cw.movieId)
-                  val isDrama =
-                    DramaExperienceDetector.isEpisodicDrama(cachedMovie) ||
-                      cw.mediaType.equals("Drama", ignoreCase = true)
-                  if (isDrama && cw.season > 0 && cw.episode > 0) {
-                    navController.navigate(
-                      buildDramaPlayerRoute(
-                        movieId = cw.movieId,
-                        season = cw.season,
-                        episode = cw.episode,
-                        positionMs = cw.positionMs,
-                      )
-                    )
-                  } else {
+                  if (cw.localUri.isNotBlank()) {
                     navController.navigate(
                       buildPlayerRoute(
                         movieId = cw.movieId,
                         season = cw.season,
                         episode = cw.episode,
                         positionMs = cw.positionMs,
+                        localUri = cw.localUri,
+                        localTitle = cw.title,
                       )
                     )
+                  } else {
+                    val cachedMovie = catalogRepository.getCachedMovie(cw.movieId)
+                    val isDrama =
+                      DramaExperienceDetector.isEpisodicDrama(cachedMovie) ||
+                        cw.mediaType.equals("Drama", ignoreCase = true)
+                    if (isDrama && cw.season > 0 && cw.episode > 0) {
+                      navController.navigate(
+                        buildDramaPlayerRoute(
+                          movieId = cw.movieId,
+                          season = cw.season,
+                          episode = cw.episode,
+                          positionMs = cw.positionMs,
+                        )
+                      )
+                    } else {
+                      navController.navigate(
+                        buildPlayerRoute(
+                          movieId = cw.movieId,
+                          season = cw.season,
+                          episode = cw.episode,
+                          positionMs = cw.positionMs,
+                        )
+                      )
+                    }
                   }
                 },
                 onRemoveContinueWatching = progressStore::removeProgress,
@@ -751,9 +764,22 @@ private fun DecanMainShell(
             composable(TopTab.DOWNLOADS.route) {
               DownloadsScreen(
                 storageLocation = appSettings.storageLocation,
+                progressStore = progressStore,
                 onChangeStorageLocation = settingsRepository::setStorageLocation,
                 onPlayLocalFile = { localUri, title ->
                   navController.navigate(buildPlayerRoute(localUri = localUri, localTitle = title))
+                },
+                onPlayDownloadedTask = { task, resumeMs ->
+                  navController.navigate(
+                    buildPlayerRoute(
+                      movieId = task.movieId,
+                      season = task.seasonNumber,
+                      episode = task.episodeNumber,
+                      positionMs = resumeMs,
+                      localUri = task.localUri.orEmpty(),
+                      localTitle = task.title,
+                    )
+                  )
                 },
                 onExploreMovies = { navigateTopTab(TopTab.DISCOVER) },
                 onNotify = onNotify,

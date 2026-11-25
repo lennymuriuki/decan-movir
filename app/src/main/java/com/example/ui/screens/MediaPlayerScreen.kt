@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.graphics.Rect
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.net.Uri
@@ -66,15 +67,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toAndroidRectF
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.graphics.toRect
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.example.data.download.DownloadTaskInfo
 import com.example.data.download.StreamDownloadManager
 import com.example.data.model.Movie
 import com.example.data.model.SavedMovieEntry
@@ -97,6 +103,9 @@ import com.example.ui.components.PlayerOverlayState
 import com.example.ui.components.PlayerRecommendationPosterCard
 import com.example.ui.components.PlayerSettingsSheet
 import com.example.ui.components.PlayerSubtitlesSheet
+import com.example.ui.pip.PipSupport
+import com.example.ui.pip.PlayerPipController
+import com.example.ui.pip.rememberIsInPictureInPictureMode
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.async
@@ -150,7 +159,12 @@ fun MediaPlayerScreen(
   var offlineSubTracks by remember(localPlayUri) {
     mutableStateOf<Map<String, List<SubtitleCue>>>(emptyMap())
   }
+  var offlineTaskMeta by remember(localPlayUri) { mutableStateOf<DownloadTaskInfo?>(null) }
   var isLoadingMedia by remember { mutableStateOf(localPlayUri.isNullOrBlank()) }
+
+  val isInPipMode = rememberIsInPictureInPictureMode()
+  val pipSupported = remember(context) { PipSupport.isPipSupported(context) }
+  var videoSurfaceRect by remember { mutableStateOf<Rect?>(null) }
 
   var isFullscreen by remember { mutableStateOf(false) }
   var isLocked by remember { mutableStateOf(false) }
@@ -184,10 +198,20 @@ fun MediaPlayerScreen(
   var playerError by remember { mutableStateOf<String?>(null) }
   var currentPositionMs by remember { mutableLongStateOf(0L) }
   var durationMs by remember { mutableLongStateOf(0L) }
-  var pendingSeekMs by remember(movieId) {
+  var pendingSeekMs by remember(movieId, localPlayUri) {
     val savedResume =
       if (initialPositionMs > 0L) initialPositionMs
-      else progressStore?.getProgress(movieId)?.positionMs ?: 0L
+      else if (!localPlayUri.isNullOrBlank()) {
+        progressStore?.findDownloadWatchProgress(
+          movieId = movieId,
+          season = initialSeason,
+          episode = initialEpisode,
+          localUri = localPlayUri,
+          title = localTitle.orEmpty(),
+        )?.takeIf { !it.isFinished }?.positionMs ?: 0L
+      } else {
+        progressStore?.getProgress(movieId)?.positionMs ?: 0L
+      }
     mutableLongStateOf(savedResume)
   }
   var videoWidth by remember { mutableIntStateOf(16) }
@@ -196,6 +220,41 @@ fun MediaPlayerScreen(
   var surfaceHolderRef by remember { mutableStateOf<SurfaceHolder?>(null) }
   var upNextDismissed by remember(selectedSeason, selectedEpisode, activeMovieId) {
     mutableStateOf(false)
+  }
+
+  fun persistWatchProgress(posMs: Long, durMs: Long) {
+    val currentM = movie
+    val task = offlineTaskMeta
+    val resolvedMovieId =
+      currentM?.id?.takeIf { it.isNotBlank() }
+        ?: task?.movieId?.takeIf { it.isNotBlank() }
+        ?: movieId
+    val resolvedTitle =
+      localTitle?.takeIf { it.isNotBlank() }
+        ?: task?.cleanDisplayTitle?.takeIf { it.isNotBlank() }
+        ?: currentM?.title
+        ?: "Decan Theater"
+    val resolvedPoster =
+      currentM?.posterUrl?.takeIf { it.isNotBlank() }
+        ?: task?.displayArtworkUrl.orEmpty()
+    val resolvedMediaType =
+      currentM?.mediaType?.takeIf { it.isNotBlank() }
+        ?: task?.mediaType?.takeIf { it.isNotBlank() }
+        ?: "Movie"
+    val resolvedSeason = if (selectedSeason > 0) selectedSeason else (task?.seasonNumber ?: 0)
+    val resolvedEpisode = if (selectedEpisode > 0) selectedEpisode else (task?.episodeNumber ?: 0)
+
+    progressStore?.saveProgress(
+      movieId = resolvedMovieId,
+      title = resolvedTitle,
+      posterUrl = resolvedPoster,
+      mediaType = resolvedMediaType,
+      season = resolvedSeason,
+      episode = resolvedEpisode,
+      positionMs = posMs,
+      durationMs = durMs,
+      localUri = localPlayUri.orEmpty(),
+    )
   }
 
   fun applyVolume(nextVolume: Float, syncSystemStream: Boolean) {
@@ -238,15 +297,15 @@ fun MediaPlayerScreen(
   }
 
   // Fullscreen orientation & immersive bars
-  LaunchedEffect(isFullscreen) {
+  LaunchedEffect(isFullscreen, isInPipMode) {
     if (activity != null) {
       activity.requestedOrientation =
-        if (isFullscreen) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        if (isFullscreen && !isInPipMode) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
       val window = activity.window
       if (window != null) {
         val controller = WindowCompat.getInsetsController(window, view)
-        if (isFullscreen) {
+        if (isFullscreen && !isInPipMode) {
           controller.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
           controller.hide(WindowInsetsCompat.Type.systemBars())
@@ -259,18 +318,8 @@ fun MediaPlayerScreen(
 
   DisposableEffect(Unit) {
     onDispose {
-      val currentM = movie
-      if (localPlayUri.isNullOrBlank() && currentM != null && currentPositionMs > 3_000L) {
-        progressStore?.saveProgress(
-          movieId = currentM.id,
-          title = currentM.title,
-          posterUrl = currentM.posterUrl,
-          mediaType = currentM.mediaType,
-          season = selectedSeason,
-          episode = selectedEpisode,
-          positionMs = currentPositionMs,
-          durationMs = durationMs,
-        )
+      if (currentPositionMs > 2_000L || (durationMs > 0L && currentPositionMs >= durationMs)) {
+        persistWatchProgress(currentPositionMs, durationMs)
       }
       if (activity != null) {
         activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
@@ -329,6 +378,54 @@ fun MediaPlayerScreen(
   // Initial load for movie detail, streams, subtitles & recommendations
   LaunchedEffect(activeMovieId, localPlayUri) {
     if (!localPlayUri.isNullOrBlank()) {
+      val matchedTask =
+        StreamDownloadManager.queryAllDownloads(context).firstOrNull {
+          it.localUri == localPlayUri
+        }
+      offlineTaskMeta = matchedTask
+      if (matchedTask != null) {
+        if (selectedSeason <= 0 && matchedTask.seasonNumber > 0) {
+          selectedSeason = matchedTask.seasonNumber
+        }
+        if (selectedEpisode <= 0 && matchedTask.episodeNumber > 0) {
+          selectedEpisode = matchedTask.episodeNumber
+        }
+        if (pendingSeekMs == 0L && initialPositionMs <= 0L) {
+          val resumed =
+            progressStore?.findDownloadWatchProgress(
+              movieId = matchedTask.movieId.ifBlank { movieId },
+              season = matchedTask.seasonNumber,
+              episode = matchedTask.episodeNumber,
+              localUri = localPlayUri,
+              relativePath = matchedTask.relativePath,
+              title = matchedTask.title,
+            )
+          if (resumed != null && !resumed.isFinished && resumed.positionMs > 0L) {
+            pendingSeekMs = resumed.positionMs
+          }
+        }
+        if (movie == null && matchedTask.displayArtworkUrl.isNotBlank()) {
+          movie =
+            Movie(
+              id = matchedTask.movieId.ifBlank { "local_${matchedTask.id}" },
+              trackId = matchedTask.id,
+              title = matchedTask.cleanDisplayTitle,
+              director = "Offline Library",
+              genre = matchedTask.genre.ifBlank { matchedTask.mediaType },
+              releaseYear = matchedTask.releaseYear,
+              releaseDateLabel = matchedTask.releaseYear,
+              posterUrl = matchedTask.posterUrl,
+              backdropUrl = matchedTask.backdropUrl,
+              previewUrl = localPlayUri,
+              synopsis = "Downloaded offline in Decan Movie.",
+              runtimeMinutes = 0,
+              contentRating = "",
+              mediaType = matchedTask.mediaType,
+              sourceProvider = "Offline",
+            )
+        }
+      }
+
       val targetTitle = localTitle?.takeIf { it.isNotBlank() } ?: movie?.title.orEmpty()
       val discovered =
         StreamDownloadManager.findOfflineSubtitlesForMedia(
@@ -523,6 +620,11 @@ fun MediaPlayerScreen(
       }
       mp.setOnCompletionListener {
         isPlaying = false
+        val completedDuration =
+          durationMs.coerceAtLeast(runCatching { mp.duration.toLong() }.getOrDefault(0L)).coerceAtLeast(15_000L)
+        durationMs = completedDuration
+        currentPositionMs = completedDuration
+        persistWatchProgress(completedDuration, completedDuration)
         if (appSettings.autoPlayNextEpisode && seasons.isNotEmpty()) goToNextEpisode()
         else controlsVisible = true
       }
@@ -570,20 +672,8 @@ fun MediaPlayerScreen(
             currentPositionMs = mp.currentPosition.toLong()
             if (durationMs <= 0L) durationMs = mp.duration.toLong().coerceAtLeast(0L)
             tickCount++
-            if (tickCount % 20 == 0 && localPlayUri.isNullOrBlank()) {
-              val m = movie
-              if (m != null && currentPositionMs > 3_000L) {
-                progressStore?.saveProgress(
-                  movieId = m.id,
-                  title = m.title,
-                  posterUrl = m.posterUrl,
-                  mediaType = m.mediaType,
-                  season = selectedSeason,
-                  episode = selectedEpisode,
-                  positionMs = currentPositionMs,
-                  durationMs = durationMs,
-                )
-              }
+            if (tickCount % 12 == 0 && currentPositionMs >= 2_000L) {
+              persistWatchProgress(currentPositionMs, durationMs)
             }
           }
         }
@@ -663,18 +753,52 @@ fun MediaPlayerScreen(
       upNextSeconds = upNextSeconds,
       gestureHudType = gestureHudType,
       gestureHudFraction = gestureHudFraction,
+      canEnterPip = pipSupported,
     )
+
+  PlayerPipController(
+    shouldAutoEnterPip = isPlaying && playbackUrl != null && playerError == null && !isLoadingMedia,
+    isPlaying = isPlaying,
+    videoWidth = videoWidth,
+    videoHeight = videoHeight,
+    sourceRect = videoSurfaceRect,
+    includeSeekActions = true,
+    onPlay = {
+      mediaPlayer?.let { mp ->
+        runCatching {
+          if (!mp.isPlaying) {
+            mp.start()
+            isPlaying = true
+          }
+        }
+      }
+    },
+    onPause = {
+      mediaPlayer?.let { mp ->
+        runCatching {
+          if (mp.isPlaying) {
+            mp.pause()
+            isPlaying = false
+            persistWatchProgress(currentPositionMs, durationMs)
+          }
+        }
+      }
+    },
+    onSeekBy = { delta -> seekTo(currentPositionMs + delta) },
+  )
 
   Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
     BoxWithConstraints(
       modifier =
-        if (isFullscreen) {
+        (if (isFullscreen || isInPipMode) {
           Modifier.fillMaxSize().background(Color.Black)
         } else {
           Modifier.fillMaxWidth()
             .windowInsetsPadding(WindowInsets.statusBars)
             .aspectRatio(16f / 9f)
             .background(Color.Black)
+        }).onGloballyPositioned { coords ->
+          videoSurfaceRect = coords.boundsInWindow().toAndroidRectF().toRect()
         },
       contentAlignment = Alignment.Center,
     ) {
@@ -738,29 +862,31 @@ fun MediaPlayerScreen(
         }
       }
 
-      PlayerGestureLayer(
-        isLocked = isLocked,
-        onToggleControls = { controlsVisible = !controlsVisible },
-        onDoubleTapSeek = { delta ->
-          seekTo(currentPositionMs + delta)
-          seekFeedbackText = if (delta < 0) "-10s" else "+10s"
-        },
-        onVerticalVolumeDrag = { delta ->
-          val next = (volume + delta).coerceIn(0f, 1f)
-          applyVolume(next, syncSystemStream = true)
-          gestureHudType = PlayerHudGestureType.VOLUME
-          gestureHudFraction = next
-        },
-        onVerticalBrightnessDrag = { delta ->
-          val next = (brightness + delta).coerceIn(0.05f, 1f)
-          applyBrightness(next)
-          gestureHudType = PlayerHudGestureType.BRIGHTNESS
-          gestureHudFraction = next
-        },
-        onGestureDragEnd = { gestureHudType = null },
-      )
+      if (!isInPipMode) {
+        PlayerGestureLayer(
+          isLocked = isLocked,
+          onToggleControls = { controlsVisible = !controlsVisible },
+          onDoubleTapSeek = { delta ->
+            seekTo(currentPositionMs + delta)
+            seekFeedbackText = if (delta < 0) "-10s" else "+10s"
+          },
+          onVerticalVolumeDrag = { delta ->
+            val next = (volume + delta).coerceIn(0f, 1f)
+            applyVolume(next, syncSystemStream = true)
+            gestureHudType = PlayerHudGestureType.VOLUME
+            gestureHudFraction = next
+          },
+          onVerticalBrightnessDrag = { delta ->
+            val next = (brightness + delta).coerceIn(0.05f, 1f)
+            applyBrightness(next)
+            gestureHudType = PlayerHudGestureType.BRIGHTNESS
+            gestureHudFraction = next
+          },
+          onGestureDragEnd = { gestureHudType = null },
+        )
+      }
 
-      if ((isLoadingMedia || isBuffering) && !controlsVisible) {
+      if (!isInPipMode && (isLoadingMedia || isBuffering) && !controlsVisible) {
         Column(
           horizontalAlignment = Alignment.CenterHorizontally,
           verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -782,7 +908,7 @@ fun MediaPlayerScreen(
         }
       }
 
-      if (playerError != null) {
+      if (!isInPipMode && playerError != null) {
         Column(
           horizontalAlignment = Alignment.CenterHorizontally,
           verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -821,52 +947,85 @@ fun MediaPlayerScreen(
         }
       }
 
-      PlayerControlsOverlay(
-        state = overlayState,
-        onBack = { if (isFullscreen) isFullscreen = false else onBack() },
-        onPlayPause = {
-          val mp = mediaPlayer ?: return@PlayerControlsOverlay
-          runCatching {
-            if (mp.isPlaying) {
-              mp.pause()
-              isPlaying = false
-            } else {
-              mp.start()
-              isPlaying = true
+      if (isInPipMode) {
+        val cueText = activeCue?.text
+        if (!cueText.isNullOrBlank()) {
+          Surface(
+            color = Color.Black.copy(alpha = 0.72f),
+            shape = MaterialTheme.shapes.extraSmall,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 8.dp, vertical = 6.dp),
+          ) {
+            Text(
+              text = cueText,
+              style = MaterialTheme.typography.labelSmall,
+              color = Color.White,
+              textAlign = TextAlign.Center,
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            )
+          }
+        }
+      } else {
+        PlayerControlsOverlay(
+          state = overlayState,
+          onBack = { if (isFullscreen) isFullscreen = false else onBack() },
+          onPlayPause = {
+            val mp = mediaPlayer ?: return@PlayerControlsOverlay
+            runCatching {
+              if (mp.isPlaying) {
+                mp.pause()
+                isPlaying = false
+                if (currentPositionMs >= 2_000L) {
+                  persistWatchProgress(currentPositionMs, durationMs)
+                }
+              } else {
+                mp.start()
+                isPlaying = true
+              }
             }
-          }
-        },
-        onPrevious = { goToPreviousEpisode() },
-        onNext = { goToNextEpisode() },
-        onSeekBy = { delta ->
-          seekTo(currentPositionMs + delta)
-          seekFeedbackText = if (delta < 0) "-10s" else "+10s"
-        },
-        onSeekTo = { target -> seekTo(target) },
-        onToggleMute = { toggleMute() },
-        onVolumeChange = { next -> applyVolume(next, syncSystemStream = true) },
-        onToggleFullscreen = { isFullscreen = !isFullscreen },
-        onToggleLock = { locked ->
-          isLocked = locked
-          controlsVisible = true
-        },
-        onToggleZoomFill = { zoomFill = !zoomFill },
-        onOpenSubtitles = { showSubtitleSheet = true },
-        onOpenSettings = { showSettingsSheet = true },
-        onOpenDownload = { showBatchDownloadSheet = true },
-        onOpenExternal = {
-          playbackUrl?.let { url ->
-            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-          }
-        },
-        onPlayNextNow = { goToNextEpisode() },
-        onDismissUpNext = { upNextDismissed = true },
-        onControlInteraction = { interactionBump++ },
-      )
+          },
+          onPrevious = { goToPreviousEpisode() },
+          onNext = { goToNextEpisode() },
+          onSeekBy = { delta ->
+            seekTo(currentPositionMs + delta)
+            seekFeedbackText = if (delta < 0) "-10s" else "+10s"
+          },
+          onSeekTo = { target -> seekTo(target) },
+          onToggleMute = { toggleMute() },
+          onVolumeChange = { next -> applyVolume(next, syncSystemStream = true) },
+          onToggleFullscreen = { isFullscreen = !isFullscreen },
+          onToggleLock = { locked ->
+            isLocked = locked
+            controlsVisible = true
+          },
+          onToggleZoomFill = { zoomFill = !zoomFill },
+          onOpenSubtitles = { showSubtitleSheet = true },
+          onOpenSettings = { showSettingsSheet = true },
+          onOpenDownload = { showBatchDownloadSheet = true },
+          onOpenExternal = {
+            playbackUrl?.let { url ->
+              runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+            }
+          },
+          onPlayNextNow = { goToNextEpisode() },
+          onDismissUpNext = { upNextDismissed = true },
+          onControlInteraction = { interactionBump++ },
+          onEnterPip = {
+            PipSupport.enterPictureInPicture(
+              context = context,
+              isPlaying = isPlaying,
+              videoWidth = videoWidth,
+              videoHeight = videoHeight,
+              sourceRect = videoSurfaceRect,
+              autoEnterEnabled = isPlaying,
+              includeSeekActions = true,
+            )
+          },
+        )
+      }
     }
 
     // PORTRAIT CONTENT BELOW PINNED VIDEO
-    if (!isFullscreen) {
+    if (!isFullscreen && !isInPipMode) {
       val currentMovie = movie
       LazyColumn(
         modifier =
@@ -1133,6 +1292,12 @@ fun MediaPlayerScreen(
           isSeries = seasons.isNotEmpty() || (selectedSeason > 0 && selectedEpisode > 0),
           allowMetered = appSettings.allowMeteredDownloads,
           storageLocation = appSettings.storageLocation,
+          movieId = movie?.id.orEmpty(),
+          posterUrl = movie?.posterUrl.orEmpty(),
+          backdropUrl = movie?.backdropUrl.orEmpty(),
+          mediaType = movie?.mediaType ?: if (seasons.isNotEmpty()) "Series" else "Movie",
+          genre = movie?.genre.orEmpty(),
+          releaseYear = movie?.releaseYear.orEmpty(),
         ).onSuccess { onNotify("Downloading ${sub.language} (.srt)") }
       },
       onDismiss = { showSubtitleSheet = false },

@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Settings
@@ -114,6 +115,7 @@ data class PlayerOverlayState(
   val upNextSeconds: Int?,
   val gestureHudType: PlayerHudGestureType?,
   val gestureHudFraction: Float,
+  val canEnterPip: Boolean = true,
 )
 
 @Composable
@@ -190,6 +192,7 @@ fun PlayerControlsOverlay(
   onPlayNextNow: () -> Unit,
   onDismissUpNext: () -> Unit,
   onControlInteraction: () -> Unit,
+  onEnterPip: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   var showVolumeSlider by remember { mutableStateOf(false) }
@@ -442,6 +445,22 @@ fun PlayerControlsOverlay(
                   contentDescription = "Toggle fit or zoom fill",
                   tint =
                     if (state.zoomFill) MaterialTheme.colorScheme.primary else Color.White,
+                )
+              }
+            }
+
+            if (state.hasPlaybackUrl && state.canEnterPip) {
+              IconButton(
+                onClick = {
+                  onControlInteraction()
+                  onEnterPip()
+                },
+                modifier = Modifier.testTag("player_pip_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.Filled.PictureInPictureAlt,
+                  contentDescription = "Picture-in-Picture",
+                  tint = Color.White,
                 )
               }
             }
