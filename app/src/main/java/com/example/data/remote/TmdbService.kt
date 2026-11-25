@@ -255,7 +255,7 @@ class TmdbService(
     private const val TMDB_BASE = "https://api.themoviedb.org/3"
     private const val IMAGE_POSTER_BASE = "https://image.tmdb.org/t/p/w500"
     private const val IMAGE_BACKDROP_BASE = "https://image.tmdb.org/t/p/w1280"
-    const val PLACEHOLDER_TOKEN = "YOUR_TMDB_READ_ACCESS_TOKEN"
+    const val PLACEHOLDER_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI2MjBkNDY2YTdlYjJjMTVkY2IxNTdlNzkwMTZiNzU1NSIsIm5iZiI6MTc4MTE3MTMwNS45NTEsInN1YiI6IjZhMmE4NDY5ZTVkYjA2NTcxZjhlYWQ1NCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.3NSZEDN6t2a4r8e-tuYWsf0G57ek_NpJlWUcTwgVMe8"
 
     fun isValidToken(raw: String?): Boolean {
       val trimmed = raw?.trim().orEmpty()
